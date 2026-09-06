@@ -1,0 +1,5 @@
+Keeps this directory in git.
+
+phpunit.xml declares a "Feature" testsuite pointing here. Git does not track
+empty directories, so without this file a fresh clone fails immediately with
+"Test directory tests/Feature not found" -  before a single test runs.

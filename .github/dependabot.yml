@@ -1,0 +1,37 @@
+version: 2
+updates:
+  - package-ecosystem: composer
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      dev-dependencies:
+        dependency-type: development
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    # One PR for all of them. Four separate PRs for four action bumps is how
+    # Dependabot becomes something you scroll past, and these never reach
+    # adopters anyway -  .github is export-ignored, so no CI action version is
+    # part of the published package.
+    #
+    # upload-artifact is deliberately NOT in the group. That action has shipped
+    # breaking changes between majors before, and it is the one whose failure
+    # would look like a coverage-job failure rather than a dependency bump.
+    # It gets its own PR so a red run points at one thing.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "actions/upload-artifact"
+    # upload-artifact v7 failed CI on the v4 -> v7 bump and was not worth
+    # debugging: it uploads a coverage file for humans to download, it is not
+    # part of the package, and v4 works. Majors are ignored; patches and minors
+    # still come through, so a security fix is not blocked by this.
+    ignore:
+      - dependency-name: "actions/upload-artifact"
+        update-types: ["version-update:semver-major"]

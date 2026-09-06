@@ -1,0 +1,11 @@
+{
+    "name": "jeeves-dev",
+    "private": true,
+    "description": "Dev-only tooling for the widget's browser tests. Not published; excluded from the Composer dist archive.",
+    "scripts": {
+        "test": "node tests/js/widget.test.js"
+    },
+    "devDependencies": {
+        "jsdom": "^25.0.0"
+    }
+}

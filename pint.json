@@ -1,0 +1,14 @@
+{
+    "preset": "laravel",
+    "exclude": [
+        "tests/Stubs"
+    ],
+    "rules": {
+        "declare_strict_types": false,
+        "concat_space": { "spacing": "one" },
+        "not_operator_with_successor_space": false,
+        "ordered_imports": { "sort_algorithm": "alpha" },
+        "no_unused_imports": true,
+        "single_trait_insert_per_statement": true
+    }
+}

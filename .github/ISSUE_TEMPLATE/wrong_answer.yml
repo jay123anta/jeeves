@@ -1,0 +1,60 @@
+name: Wrong answer
+description: A question returned a number that is not correct
+labels: ["wrong-answer"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Roughly one question in five is wrong on an **uncurated** schema -  that
+        is documented, not a defect. Before filing, please run:
+
+        ```bash
+        php artisan jeeves:audit-schema
+        ```
+
+        It reports what the model is being left to guess: undescribed columns,
+        two columns that could both mean "revenue", missing `required_filter`
+        rules. Most wrong answers are a missing sentence rather than a bug.
+
+        If it still misreads after curation, that is worth a report.
+  - type: input
+    id: question
+    attributes:
+      label: The question, exactly as typed
+    validations:
+      required: true
+  - type: input
+    id: summary
+    attributes:
+      label: The parsed_summary line from the response
+      description: How the engine says it understood the question.
+      placeholder: "Orders · revenue · by region · status is pending"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: The answer you expected, and the SQL you would have written
+      render: sql
+    validations:
+      required: true
+  - type: textarea
+    id: schema
+    attributes:
+      label: The relevant schema file
+      description: From config/jeeves-schemas/. Redact anything sensitive.
+      render: php
+    validations:
+      required: true
+  - type: input
+    id: mode
+    attributes:
+      label: query_mode
+      placeholder: "auto"
+  - type: input
+    id: model
+    attributes:
+      label: Provider and model
+      placeholder: "gemini / gemini-2.5-flash"
+    validations:
+      required: true

@@ -1,0 +1,451 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # A button in the Actions tab. Push events are the normal trigger, but when
+  # they do not arrive there is otherwise no way to ask for a run, and "is the
+  # suite green" stops being answerable at exactly the moment it matters.
+  workflow_dispatch:
+
+# Several pushes in quick succession used to queue a full matrix each, so runs
+# piled up behind one another and the newest -  the only one anybody cares
+# about -  waited longest. Superseded runs are abandoned instead.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: PHP ${{ matrix.php }} · Laravel ${{ matrix.laravel }} · ${{ matrix.dependency-version }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Laravel 10 and 11 are deliberately absent: both are past security
+        # support and every published version now carries advisories, so
+        # Composer refuses to install them under its default
+        # policy.advisories.block. A version the package manager will not
+        # install is not a version this package can claim to support.
+        php: ['8.2', '8.3', '8.4', '8.5']
+        laravel: [12, 13]
+        dependency-version: [prefer-stable]
+        include:
+          # Each Laravel release pairs with one Testbench major.
+          - laravel: 12
+            testbench: ^10.0
+          - laravel: 13
+            testbench: ^11.0
+          # Lowest allowed dependency versions at both ends of the supported
+          # range -  catches "works on my lockfile" breakage in either
+          # direction.
+          - php: '8.2'
+            laravel: 12
+            testbench: ^10.0
+            dependency-version: prefer-lowest
+          - php: '8.3'
+            laravel: 13
+            testbench: ^11.0
+            dependency-version: prefer-lowest
+        exclude:
+          # Laravel 13 requires PHP 8.3+.
+          - php: '8.2'
+            laravel: 13
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mbstring, pdo, pdo_sqlite, sqlite3, json, curl
+          coverage: none
+
+      - name: Cache Composer downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.composer/cache/files
+          key: composer-${{ matrix.php }}-${{ matrix.laravel }}-${{ matrix.dependency-version }}-${{ hashFiles('composer.json') }}
+          restore-keys: composer-${{ matrix.php }}-${{ matrix.laravel }}-
+
+      - name: Select Laravel ${{ matrix.laravel }}
+        run: |
+          composer require --dev --no-interaction --no-update \
+            "laravel/framework:^${{ matrix.laravel }}.0" \
+            "orchestra/testbench:${{ matrix.testbench }}"
+
+      - name: Install dependencies
+        run: composer update --${{ matrix.dependency-version }} --prefer-dist --no-interaction --no-progress
+
+      # `composer show` takes [<package> [<version>]], so passing two package
+      # names makes it parse the second as a version constraint and fail.
+      - name: Show resolved versions
+        run: |
+          composer show laravel/framework --no-interaction | head -3
+          composer show phpunit/phpunit --no-interaction | head -3
+
+      # Surface the failure text as an annotation. Log downloads need admin
+      # rights, but annotations are readable on a public repo, so a red build
+      # says what actually broke instead of just "exit code 1".
+      - name: Run test suite
+        run: |
+          set -o pipefail
+          vendor/bin/phpunit --colors=never 2>&1 | tee phpunit.log || {
+            echo "::error title=PHPUnit failed (PHP ${{ matrix.php }} / Laravel ${{ matrix.laravel }})::$(tail -c 2500 phpunit.log | tr '\n' '~')"
+            exit 1
+          }
+
+  # The rest of the suite runs on SQLite so it needs no services, which leaves
+  # the Postgres introspection SQL -  everything `jeeves:discover` depends
+  # on -  with no coverage. This job is the only place PostgresIntrospectorTest
+  # actually executes; elsewhere it skips itself.
+  postgres:
+    name: PostgreSQL ${{ matrix.postgres }} integration
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Latest, plus one still-common older major.
+        postgres: ['16', '18']
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      NQ_PGSQL_HOST: 127.0.0.1
+      NQ_PGSQL_PORT: '5432'
+      NQ_PGSQL_DATABASE: postgres
+      NQ_PGSQL_USERNAME: postgres
+      NQ_PGSQL_PASSWORD: postgres
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pdo, pdo_pgsql, pgsql, pdo_sqlite, sqlite3, json, curl
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+
+      - name: Run the full suite against PostgreSQL
+        run: |
+          set -o pipefail
+          vendor/bin/phpunit --colors=never 2>&1 | tee phpunit.log || {
+            echo "::error title=PHPUnit failed on PostgreSQL ${{ matrix.postgres }}::$(tail -c 2500 phpunit.log | tr '\n' '~')"
+            exit 1
+          }
+
+      # A skipped test is not a passing test. If the service or the extension
+      # is misconfigured the suite would still be green while covering nothing,
+      # so assert these cases really ran.
+      - name: Fail if the Postgres tests were skipped
+        run: |
+          vendor/bin/phpunit --filter PostgresIntrospectorTest --do-not-cache-result > pg.log 2>&1 || true
+          cat pg.log
+          if grep -qiE 'skipped|no tests executed' pg.log; then
+            echo "::error::PostgresIntrospectorTest did not run against the service"
+            exit 1
+          fi
+
+      # The bypass corpus is the reason this job exists for security, not just
+      # for introspection. Whether a string is a bypass is decided by the
+      # engine: `"secrets"` is an identifier here and a string literal on
+      # MySQL. If this skips, the corpus was measured on SQLite and the
+      # PostgreSQL-only vectors were never tried.
+      - name: Fail if the bypass corpus skipped PostgreSQL
+        run: |
+          vendor/bin/phpunit --filter no_allowed_statement_returns_the_canary_on_postgres \
+            --do-not-cache-result > canary-pg.log 2>&1 || true
+          cat canary-pg.log
+          if grep -qiE 'skipped|no tests executed' canary-pg.log; then
+            echo "::error::The bypass corpus did not run against PostgreSQL"
+            exit 1
+          fi
+
+  # MySQL was the one supported engine with no integration coverage, and a bug
+  # lived in exactly that gap: the named-record lookup emitted PostgreSQL-only
+  # ILIKE, a hard syntax error here. Unit tests could not see it (the builder
+  # only returns a string) and Postgres could not see it (there the string is
+  # valid). Only executing the generated SQL on these engines catches it.
+  mysql:
+    name: ${{ matrix.label }} integration
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: MySQL 8.4
+            image: mysql:8.4
+            health_cmd: mysqladmin ping -h 127.0.0.1 -uroot -proot
+          - label: MySQL 9
+            image: mysql:9
+            health_cmd: mysqladmin ping -h 127.0.0.1 -uroot -proot
+          # MariaDB ships its own healthcheck.sh and does not guarantee the
+          # mysqladmin alias. It also reads the MYSQL_* variables for backwards
+          # compatibility, so one set of env vars covers both families - 
+          # supplying MARIADB_* as well made the entrypoint refuse to start.
+          - label: MariaDB 11
+            image: mariadb:11
+            health_cmd: healthcheck.sh --connect --innodb_initialized
+
+    services:
+      db:
+        image: ${{ matrix.image }}
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: nq_mysql_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="${{ matrix.health_cmd }}"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+          --health-start-period=30s
+
+    env:
+      NQ_MYSQL_HOST: 127.0.0.1
+      NQ_MYSQL_PORT: '3306'
+      NQ_MYSQL_DATABASE: nq_mysql_test
+      NQ_MYSQL_USERNAME: root
+      NQ_MYSQL_PASSWORD: root
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pdo, pdo_mysql, mysqli, pdo_sqlite, sqlite3, json, curl
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+
+      - name: Run the full suite against ${{ matrix.label }}
+        run: |
+          set -o pipefail
+          vendor/bin/phpunit --colors=never 2>&1 | tee phpunit.log || {
+            echo "::error title=PHPUnit failed on ${{ matrix.label }}::$(tail -c 2500 phpunit.log | tr '\n' '~')"
+            exit 1
+          }
+
+      # A skipped test is not a passing test.
+      - name: Fail if the MySQL tests were skipped
+        run: |
+          vendor/bin/phpunit --filter MysqlIntrospectorTest --do-not-cache-result > my.log 2>&1 || true
+          cat my.log
+          if grep -qiE 'skipped|no tests executed' my.log; then
+            echo "::error::MysqlIntrospectorTest did not run against the service"
+            exit 1
+          fi
+
+      # Backtick identifiers and `#` comments exist on this family alone, so a
+      # skip here means those vectors were never executed anywhere.
+      - name: Fail if the bypass corpus skipped ${{ matrix.label }}
+        run: |
+          vendor/bin/phpunit --filter no_allowed_statement_returns_the_canary_on_mysql \
+            --do-not-cache-result > canary-my.log 2>&1 || true
+          cat canary-my.log
+          if grep -qiE 'skipped|no tests executed' canary-my.log; then
+            echo "::error::The bypass corpus did not run against ${{ matrix.label }}"
+            exit 1
+          fi
+
+  # Coverage runs once, with Xdebug, which is slow enough that putting it in
+  # the matrix would multiply the wall clock for a number that does not vary by
+  # PHP version.
+  #
+  # No threshold is enforced, deliberately. A coverage gate rewards tests that
+  # execute lines over tests that check behaviour, and this suite is built on
+  # the second kind -  several of its most valuable tests assert that something
+  # does NOT happen. The report is here to be read, not to be passed.
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, pdo, pdo_sqlite, sqlite3, json, curl
+          coverage: xdebug
+
+      - name: Install dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+
+      - name: Run suite with coverage
+        run: vendor/bin/phpunit --coverage-text --coverage-clover=coverage.xml --colors=never
+
+      # always(): a failing run is exactly the one where you want the
+      # coverage report, and without this the upload is skipped precisely then.
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          retention-days: 14
+          # error, not the default warn. The case this protects is a
+          # PASSING run that produced no coverage file -  which is the bug this
+          # job shipped with, and which warn would let through silently.
+          #
+          # Combined with always() it does mean a run that dies before writing
+          # the file reports two red steps instead of one. Acceptable: the test
+          # step is listed first and is the real cause, and phpunit writes the
+          # clover file even when tests fail, so the common failure still
+          # produces an artifact.
+          if-no-files-found: error
+
+  lint:
+    name: Lint (PHP syntax + widget JS)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      # The widget JS ships unbundled and is served straight to browsers, so a
+      # syntax error would break every consumer's page.
+      - name: Check widget JS syntax
+        run: node --check resources/js/jeeves-widget.js
+
+      # A syntax check proves the file parses, not that the widget works. Every
+      # user-facing defect this package has had was found by someone clicking - 
+      # a thread that replaced itself, a button that did nothing, two number
+      # formats in one card -  and none of them could fail a test that never
+      # rendered anything. These mount the widget in a DOM and click it.
+      - name: Install browser-test dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run widget browser tests
+        run: npm test
+
+      - name: Check PHP syntax
+        run: |
+          find src config database routes stubs tests -name '*.php' -print0 \
+            | xargs -0 -n1 -P4 php -l
+
+      # Pint and PHPStan live here rather than in the test matrix: neither
+      # depends on the PHP or Laravel version, and thirteen identical failures
+      # help nobody find the one line that caused them.
+      - name: Install dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+
+      - name: Check code style
+        run: vendor/bin/pint --test
+
+      - name: Static analysis
+        run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+
+      # composer.lock is gitignored (correct for a library -  the consuming app
+      # owns the lock), so there is nothing to check it against.
+      - name: Validate composer.json
+        run: composer validate --strict --no-check-lock
+
+      # Reports, never gates. A library ships no lock, so an advisory here is
+      # almost always against a DEV dependency resolved fresh on this runner -
+      # something the adopter will never install. Failing the build on it would
+      # turn somebody else's release into a red tick on this repository, and
+      # the fix would be to wait. Surfacing it is still worth doing: a direct
+      # dependency is the case that matters, and this is where it shows up.
+      - name: Report dependency advisories
+        continue-on-error: true
+        run: composer audit --format=summary
+
+  # ---------------------------------------------------------------------------
+  # Provider conformance.
+  #
+  # Twelve-plus cases whose answers are arithmetic on three seeded rows, run
+  # against a REAL provider. The unit suite cannot find what this finds: a
+  # canned response is perfectly happy to answer a request the live API would
+  # reject, which is how the Claude driver stayed broken on every call while
+  # every test passed.
+  #
+  # Skips itself when the secret is absent, so forks and PRs from outside the
+  # repository are unaffected rather than failing on something they cannot fix.
+  # ---------------------------------------------------------------------------
+  conformance:
+    name: Conformance · ${{ matrix.provider }}
+    runs-on: ubuntu-latest
+    # Never on a fork: secrets are not available there, and a red tick nobody
+    # can clear teaches people to ignore red ticks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: gemini
+            secret: GEMINI_API_KEY
+          - provider: claude
+            secret: ANTHROPIC_API_KEY
+          - provider: deepseek
+            secret: DEEPSEEK_API_KEY
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Run conformance against ${{ matrix.provider }}
+        env:
+          JEEVES_CONFORMANCE: '1'
+          JEEVES_LLM_DRIVER: ${{ matrix.provider }}
+          JEEVES_CONFORMANCE_KEY: ${{ secrets[matrix.secret] }}
+          # Shared runners are noisy neighbours on a free tier.
+          JEEVES_CONFORMANCE_DELAY: '3'
+        run: |
+          if [ -z "$JEEVES_CONFORMANCE_KEY" ]; then
+            echo "::notice::No ${{ matrix.secret }} secret set -  conformance skipped for ${{ matrix.provider }}."
+            exit 0
+          fi
+          vendor/bin/phpunit --testsuite Conformance

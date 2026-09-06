@@ -1,0 +1,54 @@
+name: Bug report
+description: Something behaves differently from what the docs say
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Run `php artisan jeeves:doctor` first -  it names the cause of most
+        setup problems and prints the fix.
+
+        A **wrong answer** is a bug worth reporting. Please use the "Wrong
+        answer" template instead, which asks for the things needed to act on it.
+
+        Security issues go to SECURITY.md, never here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The smallest steps that show it. A failing test is ideal.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: jeeves:doctor output
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: "2.1.0"
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: PHP, Laravel, database
+      placeholder: "PHP 8.3, Laravel 12, PostgreSQL 16"
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Provider and model
+      placeholder: "gemini / gemini-2.5-flash"
+    validations:
+      required: true

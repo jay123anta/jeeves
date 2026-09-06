@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/jay123anta/jeeves/security/policy
+    about: Report privately. Never open a public issue for a vulnerability.
+  - name: Setup problem
+    url: https://github.com/jay123anta/jeeves/blob/main/docs/TROUBLESHOOTING.md
+    about: Run jeeves:doctor first -  it names the cause and prints the fix.

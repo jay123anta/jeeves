@@ -1,0 +1,19 @@
+/vendor/
+/node_modules/
+/.idea/
+/.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+.env
+composer.lock
+
+# PHPUnit
+.phpunit.result.cache
+/.phpunit.cache/
+/build/
+/coverage/
+
+# Local working scratch -  pre-release snapshots, not part of the package
+/_to_delete/

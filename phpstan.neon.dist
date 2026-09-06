@@ -1,0 +1,38 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 5
+
+    paths:
+        - src
+
+    # A defensive check against a value PHPDoc claims cannot occur is not dead
+    # code here -  it is the guard that survives a provider returning something
+    # its own docblock did not promise, which this package has been bitten by
+    # more than once. Treating PHPDoc as certain would report those guards as
+    # redundant and invite their removal.
+    treatPhpDocTypesAsCertain: false
+
+    ignoreErrors:
+        # token_get_all() is called for its SIDE EFFECT: with TOKEN_PARSE it
+        # throws ParseError on a malformed schema file, which is exactly what
+        # the surrounding try/catch is verifying. The token list is genuinely
+        # not wanted. Both call sites carry a comment saying so.
+        - identifier: function.resultUnused
+          path: src/Console/DiscoverSchemaCommand.php
+
+        # env() is correct here and cannot be config() -  this helper exists to
+        # read a value the published config may not contain at all, which is
+        # the whole point of the fallback. The caveat is real and documented in
+        # the class: on an app running config:cache, env() returns null, so the
+        # fallback yields the default and jeeves:doctor reports the
+        # config as stale instead.
+        - identifier: larastan.noEnvCallsOutsideOfConfig
+          path: src/Support/EnvValue.php
+        # larastan resolves view names against the application view paths and
+        # cannot see a package namespace registered at runtime by
+        # loadViewsFrom(). The view exists at resources/views/demo.blade.php and
+        # WidgetRouteTest renders it, which is the check that actually matters.
+        - identifier: argument.type
+          path: src/Http/Controllers/WidgetController.php

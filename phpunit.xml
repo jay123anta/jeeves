@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true">
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory>tests/Feature</directory>
+        </testsuite>
+
+        <!--
+            Security regression tests, each reproducing one audited finding.
+            Runs by default and in CI: an audit whose evidence only executes
+            when someone remembers to pass a path is an audit nobody reads.
+            A red test here is an OPEN FINDING, not a broken build - the
+            message names the ID.
+        -->
+        <testsuite name="Security">
+            <directory>tests/Security</directory>
+        </testsuite>
+        <!--
+            Accuracy benchmark. Self-skips unless JEEVES_BENCHMARK=1,
+            because it makes real API calls -  a suite that quietly spends money
+            on every run is a bad neighbour.
+        -->
+        <testsuite name="Benchmark">
+            <directory>tests/Benchmark</directory>
+        </testsuite>
+
+        <!--
+            Provider conformance. Self-skips unless
+            JEEVES_CONFORMANCE=1, because it makes real API calls.
+            Every expected value is arithmetic on three rows of seeded
+            data, so a failure is a defect and not a model having an off
+            day. Run it per provider -  that is the point.
+        -->
+        <testsuite name="Conformance">
+            <directory>tests/Conformance</directory>
+        </testsuite>
+    </testsuites>
+
+    <!--
+        What coverage measures. Without this, PHPUnit 12+ raises "No filter is
+        configured" and exits non-zero the moment coverage is asked for, so
+        the CI coverage job fails on a warning rather than on a test.
+
+        src only. Coverage of tests/ measures whether the tests ran, which the
+        test count already says, and it inflates the figure with fixture code
+        nobody ships.
+    -->
+    <source>
+        <include>
+            <directory>src</directory>
+        </include>
+    </source>
+</phpunit>
