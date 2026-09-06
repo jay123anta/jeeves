@@ -9,15 +9,9 @@
 **A natural-language query box you can put inside your own Laravel app - for
 data you are not allowed to send anywhere.**
 
-<!-- The demo GIF was recorded before the rename and still shows the old
-     `NaturalQuery::` API, so it is not shown here: a hero image contradicting
-     the package's own name on the first screen reads worse than no image.
-     Re-record it against the current API and restore this block:
-
 <p align="center">
-  <img src="https://raw.githubusercontent.com/jay123anta/jeeves/main/docs/demo.gif" alt="Asking a database a question in English - the model receives only table and column names" width="100%">
+  <img src="https://raw.githubusercontent.com/jay123anta/jeeves/main/docs/demo.gif" alt="Asking a database questions in English - revenue by city, narrowed to one city, then broken down by client - with the model receiving only table and column names" width="100%">
 </p>
--->
 
 ```blade
 {{-- One line. A chat thread, follow-up questions, voice input, charts. --}}
