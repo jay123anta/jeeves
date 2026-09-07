@@ -972,88 +972,10 @@ class QueryOrchestrator
      */
     protected function statesItsOwnMeasure(string $query): bool
     {
-        if (preg_match(
+        return (bool) preg_match(
             '/\b(?:how\s+many|how\s+much|number\s+of|count\s+of|total|sum|average|mean|median|minimum|maximum|min|max|highest|lowest|largest|smallest)\b/i',
             $query
-        )) {
-            return true;
-        }
-
-        // NQ-011. A question can name its measure without using a word that
-        // sounds like arithmetic. "top 3 customers by revenue" states exactly
-        // what to measure, and the list above contains none of it - so the
-        // engine resolved a dataset, found no revenue measure on it, and asked
-        // the user to pick a metric the sentence had already named. It failed
-        // that way in four consecutive benchmark runs.
-        //
-        // `revenue` is not a word this package should have to know. It lives in
-        // the adopter's schema, as the name or an alias of an aggregatable
-        // column, which is where this project keeps domain vocabulary and why
-        // it works on databases it has never seen. So ask the registry.
-        return $this->namesAKnownMeasure($query);
-    }
-
-    /**
-     * Does the question mention a measure some registered schema declares?
-     *
-     * Only reached on the clarification path, so the cost is paid on the rare
-     * question rather than on every one.
-     */
-    protected function namesAKnownMeasure(string $query): bool
-    {
-        $haystack = ' ' . strtolower(preg_replace('/[^a-z0-9]+/i', ' ', $query) ?? '') . ' ';
-
-        foreach ($this->vocabularyOfMeasures() as $word) {
-            if (str_contains($haystack, ' ' . $word . ' ')) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Every word an adopter's schemas use for something measurable.
-     *
-     * Column names and their aliases, plus computed metrics. Underscores become
-     * spaces so `line_total` is found in "by line total" as well as written out.
-     *
-     * Two-character names are skipped. A column called `id` or `no` would
-     * otherwise match half the questions ever asked, and turn every
-     * clarification into a guess - which is the failure the counterweight test
-     * in AQuestionThatNamesAMeasureIsNotAmbiguousTest exists to catch.
-     *
-     * @return array<int, string>
-     */
-    protected function vocabularyOfMeasures(): array
-    {
-        $words = [];
-
-        foreach (array_keys($this->registry->all()) as $datasetKey) {
-            foreach ($this->registry->getMetrics($datasetKey) as $name => $definition) {
-                $words[] = (string) $name;
-
-                foreach ($definition['aliases'] ?? [] as $alias) {
-                    $words[] = (string) $alias;
-                }
-            }
-
-            foreach (array_keys($this->registry->getComputedMetrics($datasetKey)) as $computed) {
-                $words[] = (string) $computed;
-            }
-        }
-
-        $normalised = [];
-
-        foreach ($words as $word) {
-            $word = trim(strtolower(str_replace('_', ' ', $word)));
-
-            if (mb_strlen($word) > 2) {
-                $normalised[$word] = true;
-            }
-        }
-
-        return array_keys($normalised);
+        );
     }
 
     /**
