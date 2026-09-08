@@ -9,6 +9,10 @@
 **A natural-language query box you can put inside your own Laravel app - for
 data you are not allowed to send anywhere.**
 
+Natural language to SQL (text-to-SQL, NL2SQL) as a drop-in chat window: your
+users ask in plain English, Jeeves writes the query, and your own server runs
+it. The model is sent your schema structure and nothing else.
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/jay123anta/jeeves/main/docs/demo.gif" alt="Asking a database questions in English - revenue by city, narrowed to one city, then broken down by client - with the model receiving only table and column names" width="100%">
 </p>
@@ -20,9 +24,9 @@ data you are not allowed to send anywhere.**
 
 
 
-Almost every "ask your data" product works by sending rows to a model. If the
-data is under GDPR or DPDP, or belongs to a client who has not agreed to that,
-the conversation ends there.
+Almost every "chat with your database" product works by sending rows to a
+model. If the data is under GDPR or DPDP, or belongs to a client who has not
+agreed to that, the conversation ends there.
 
 This one sends the model your **schema structure only** - table names, column
 names, types, and the words your users use for them. It returns SQL. Your
