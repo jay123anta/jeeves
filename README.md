@@ -55,8 +55,33 @@ audio reaches your server either.
 
 ## Install
 
-Requires **PHP 8.2+** and **Laravel 12 or 13**. Works on PostgreSQL, MySQL,
+Requires **PHP 8.2+** and **Laravel 11, 12 or 13**. Works on PostgreSQL, MySQL,
 MariaDB and SQLite.
+
+> **On Laravel 11.** It is supported and the suite runs against it, because
+> most applications are still there. Be aware that Laravel 11 is past security
+> support: `composer audit` reports advisories that are fixed in 12.x and 13.x
+> and in no 11.x release, because there will not be another one. That is the
+> framework's status, not this package's, and it is worth knowing before you
+> decide where to run something that sits next to your database.
+>
+> **If Composer refuses to install.** Recent Composer versions block
+> advisory-affected packages during `require` and `update`, so on Laravel 11
+> you may see *"not loaded, because they are affected by security advisories"*.
+> That block comes from your own framework and applies to every package you
+> install, not just this one. Composer reads the policy from your application's
+> `composer.json`, so the decision is yours to make there:
+>
+> ```json
+> {
+>     "config": {
+>         "policy": { "advisories": { "ignore": ["laravel/framework"] } }
+>     }
+> }
+> ```
+>
+> Upgrading to 12 or 13 is the better answer, and this package runs on both
+> unchanged. The setting above is for when that has to wait.
 
 ```bash
 composer require jayanta/jeeves

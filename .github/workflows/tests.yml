@@ -25,26 +25,48 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Laravel 10 and 11 are deliberately absent: both are past security
-        # support and every published version now carries advisories, so
-        # Composer refuses to install them under its default
-        # policy.advisories.block. A version the package manager will not
-        # install is not a version this package can claim to support.
+        # Laravel 11 is supported and tested here with its eyes open.
+        #
+        # It is past security support: `composer audit` on a fresh v11.56.1
+        # reports three advisories - a signed-URL path confusion and a CRLF
+        # injection among them - and every one of them is fixed in the 12.x and
+        # 13.x lines and in no 11.x release, because there will not be another
+        # one. Composer therefore refuses to resolve any 11.x by default, which
+        # is why the step below opts these jobs out for laravel/framework only.
+        #
+        # An earlier comment claimed that block had lapsed and 11 installed
+        # cleanly. It had not. That was measured with Composer 2.6.6, which
+        # predates the policy and cannot enforce it - a green result from a
+        # tool with the check disabled, mistaken for evidence the check passed.
+        #
+        # It is here because most applications are still on it, and a package
+        # that only runs on the two newest majors is not available to the
+        # people who most need to isolate an LLM from their database. The suite
+        # passes on 11 unmodified.
+        #
+        # An adopter on 11 should read that as: this package works, and the
+        # framework under it has unpatched issues that are not this package's
+        # to fix. Laravel 10 stays out - it is further past EOL again.
         php: ['8.2', '8.3', '8.4', '8.5']
-        laravel: [12, 13]
+        laravel: [11, 12, 13]
         dependency-version: [prefer-stable]
         include:
           # Each Laravel release pairs with one Testbench major.
+          - laravel: 11
+            testbench: ^9.0
           - laravel: 12
             testbench: ^10.0
           - laravel: 13
             testbench: ^11.0
           # Lowest allowed dependency versions at both ends of the supported
           # range -  catches "works on my lockfile" breakage in either
-          # direction.
+          # direction. The low end moved to Laravel 11 when 11 was added, so
+          # this runs there: the oldest framework on the oldest PHP with the
+          # oldest dependency of each kind is the combination nobody develops
+          # against and every "it works here" bug hides in.
           - php: '8.2'
-            laravel: 12
-            testbench: ^10.0
+            laravel: 11
+            testbench: ^9.0
             dependency-version: prefer-lowest
           - php: '8.3'
             laravel: 13
@@ -54,6 +76,13 @@ jobs:
           # Laravel 13 requires PHP 8.3+.
           - php: '8.2'
             laravel: 13
+          # Laravel 11 declares php ^8.2, so the matrix would pair it with 8.5.
+          # It shipped before 8.5 existed and will not be patched for it, so
+          # that pairing is untested by Laravel and untestable here - not known
+          # to be broken, just not something this package can vouch for. 8.2
+          # through 8.4 are the versions Laravel 11 was actually built against.
+          - php: '8.5'
+            laravel: 11
 
     steps:
       - name: Checkout
@@ -78,6 +107,31 @@ jobs:
           composer require --dev --no-interaction --no-update \
             "laravel/framework:^${{ matrix.laravel }}.0" \
             "orchestra/testbench:${{ matrix.testbench }}"
+
+      # Laravel 11 is past security support, so every published 11.x carries
+      # advisories that no 11.x release will ever fix. Composer blocks
+      # advisory-affected versions during `update` by default, which makes the
+      # whole Laravel 11 column unresolvable: it dies in dependency resolution,
+      # about twenty seconds in, before a single test runs.
+      #
+      # Scoped to laravel/framework and only on the Laravel 11 jobs. The 12 and
+      # 13 columns keep blocking on for every package, so a genuinely
+      # vulnerable dependency still stops this build.
+      #
+      # This is CI configuration and reaches no adopter. Composer reads
+      # advisory policy from the ROOT project only, so a library's own config
+      # is ignored by the applications that install it. An adopter on Laravel
+      # 11 meets this block from their own framework, on every package they
+      # require, and decides for themselves. The README says so plainly.
+      - name: Allow the Laravel 11 advisories that have no fix
+        if: matrix.laravel == 11
+        run: |
+          php -r '
+            $f = "composer.json";
+            $j = json_decode(file_get_contents($f), true);
+            $j["config"]["policy"]["advisories"]["ignore"] = ["laravel/framework"];
+            file_put_contents($f, json_encode($j, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+          '
 
       - name: Install dependencies
         run: composer update --${{ matrix.dependency-version }} --prefer-dist --no-interaction --no-progress
