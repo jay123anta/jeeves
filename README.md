@@ -224,6 +224,48 @@ production is an LLM proxy for the internet.
 
 ---
 
+## Which tables it can see
+
+**Only the ones you have written a schema file for.** The whitelist is derived
+from those files, not from your database, so a table with no schema file is not
+merely discouraged — the validator refuses any query naming it, and the model
+was never told it exists.
+
+Three levers, in the order you will reach for them:
+
+**1. Delete or don't create the schema file.** `config/jeeves-schemas/` is the
+whole list. Remove `users.php` and `users` becomes unqueryable, immediately.
+
+**2. Stop discovery from generating them at all.**
+
+```php
+// config/jeeves.php
+'schema' => [
+    'discover_exclude' => ['migrations', 'sessions', 'password_resets', 'audit_*'],
+    'discover_exclude_columns' => ['ssn', 'salary'],   // columns, not tables
+],
+```
+
+Framework tables are excluded already. Credential columns — `password`,
+`remember_token`, `two_factor_secret` — are withheld by discovery whatever you
+configure.
+
+**3. Grant only what it should read.** The first two are the package's rules;
+this one is the database's, and it holds even if the package has a bug:
+
+```sql
+GRANT SELECT ON myapp.orders    TO 'jeeves'@'%';
+GRANT SELECT ON myapp.customers TO 'jeeves'@'%';
+```
+
+`GRANT SELECT ON *.*` works and defeats the point. See
+[docs/CONNECTION.md](docs/CONNECTION.md).
+
+Already have schema files carrying something you would rather it did not see?
+`php artisan jeeves:audit-schema` names them.
+
+---
+
 ## What it is good at, and what it is not
 
 **It works well** on datasets you have described. Told that `revenue` is a
