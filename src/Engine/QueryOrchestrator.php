@@ -2267,12 +2267,22 @@ class QueryOrchestrator
             'rows' => count($rows),
         ]);
 
+        // The hint has to say what to KEEP as well as what to change.
+        //
+        // Its first version said only "return exactly one row", and the model
+        // obliged by dropping the measure: "which carrier shipped the most
+        // orders" went from `2|royal mail ; 1|dpd` to `royal mail`. One row,
+        // the right row, and the number the question was about gone. Measured
+        // over three runs before this sentence existed.
         $prompt = $this->promptBuilder->buildSqlPrompt($dataset, $question)
             . "\n\n--- RETRY ---\n"
             . 'The previous attempt returned several rows for a question that asks which '
-            . "single one is the most or the least.\nRe-generate the SQL so it returns "
-            . "exactly one row: ORDER BY the measure and LIMIT 1.\nUse only the columns "
-            . 'listed in the schema above.';
+            . "single one is the most or the least.\n"
+            . "Change ONLY the number of rows: add ORDER BY the measure DESC and LIMIT 1.\n"
+            . 'Keep exactly the same SELECT columns as a ranked answer would have - the '
+            . 'label AND the measure. Returning the label alone drops the number the '
+            . "question was asking for.\n"
+            . 'Use only the columns listed in the schema above.';
 
         $response = $this->llmProvider->generateSql($prompt);
 
