@@ -2232,6 +2232,100 @@ class QueryOrchestrator
     /**
      * Validate SQL, execute it, and format the response.
      */
+    /**
+     * One more attempt when the answer's shape contradicts the question.
+     *
+     * Returns the better answer, or null to keep the one already produced.
+     *
+     * Three properties this must hold, and each has a test:
+     *
+     *  - The success path costs nothing. Nothing here runs unless the shape is
+     *    already wrong, so a correct answer never pays for a second call.
+     *  - At most one extra generation, ever. `_shape_retried` in the metadata
+     *    is set before the second attempt, so the recursion through
+     *    validateAndExecute cannot go round again.
+     *  - The retry is adopted only if it fixed the thing it was fired for. A
+     *    second answer that is still the wrong shape is discarded and the
+     *    first is returned, so this can never make an answer worse.
+     *
+     * @param  array<int, mixed>  $rows
+     */
+    protected function retryForShape(array $queryResult, array $rows, ?string $dataset, array $metadata): ?array
+    {
+        if (($metadata['_shape_retried'] ?? false) || $dataset === null) {
+            return null;
+        }
+
+        $question = (string) ($metadata['original_query'] ?? '');
+
+        if ($question === '' || !$this->asksForASingleRow($question) || count($rows) <= 1) {
+            return null;
+        }
+
+        Log::info('[Jeeves] Answer shape contradicts the question, regenerating once', [
+            'expected' => 'one row',
+            'rows' => count($rows),
+        ]);
+
+        $prompt = $this->promptBuilder->buildSqlPrompt($dataset, $question)
+            . "\n\n--- RETRY ---\n"
+            . 'The previous attempt returned several rows for a question that asks which '
+            . "single one is the most or the least.\nRe-generate the SQL so it returns "
+            . "exactly one row: ORDER BY the measure and LIMIT 1.\nUse only the columns "
+            . 'listed in the schema above.';
+
+        $response = $this->llmProvider->generateSql($prompt);
+
+        if (!($response['success'] ?? false) || empty($response['data']['sql'])) {
+            return null;
+        }
+
+        $second = $this->validateAndExecute(
+            array_merge($queryResult, ['sql' => $response['data']['sql']]),
+            $dataset,
+            array_merge($metadata, ['_shape_retried' => true])
+        );
+
+        // Adopted only if it is the shape we retried for. Anything else -
+        // an error, a refusal, another list - leaves the first answer standing.
+        if (($second['status'] ?? null) === 'success' && count($second['rows'] ?? []) === 1) {
+            $second['metadata'] = array_merge($second['metadata'] ?? [], ['shape_retry' => true]);
+
+            return $second;
+        }
+
+        return null;
+    }
+
+    /**
+     * Does the question ask which ONE thing, rather than for a ranked list?
+     *
+     * Deliberately narrow. "top 5 carriers" and "the 3 best clients" are
+     * rankings whose correct answer has many rows, and firing on those would
+     * buy a provider call on every list anyone asks for - which is why an
+     * explicit count anywhere in the question disqualifies it outright.
+     */
+    protected function asksForASingleRow(string $question): bool
+    {
+        $q = strtolower($question);
+
+        // "top 5", "3 best", "first 10" - a ranking, however it is phrased.
+        if (preg_match('/\b(?:top|bottom|first|last|best|worst)\s+\d+\b/', $q)
+            || preg_match('/\b\d+\s+(?:best|worst|top|highest|lowest)\b/', $q)) {
+            return false;
+        }
+
+        // Plurals asking for several: "which carriers", "the products that".
+        if (preg_match('/\bwhich\s+\w+s\b/', $q) && !preg_match('/\bwhich\s+\w+s\s+(?:has|is|was)\b/', $q)) {
+            return false;
+        }
+
+        return (bool) preg_match(
+            '/\bthe\s+(?:most|least|highest|lowest|largest|smallest|biggest|greatest)\b/',
+            $q
+        );
+    }
+
     protected function validateAndExecute(array $queryResult, ?string $dataset, array $metadata): array
     {
         $sql = $queryResult['sql'];
@@ -2352,6 +2446,26 @@ class QueryOrchestrator
             $response['metadata'] = $metadata;
 
             return $response;
+        }
+
+        // Execution-guided retry. The SHAPE of what came back can be wrong
+        // when nothing about the SQL was, and that is invisible until now:
+        // "which carrier shipped the most orders" is ORDER BY ... LIMIT 1, and
+        // without the LIMIT the top row is right while every row under it is
+        // an answer to a question nobody asked.
+        //
+        // It lives here because this is the only place SQL executes. Attached
+        // to the generation sites instead it would miss the verifier's
+        // rewrite, the cached recipe replayed later, and each step of a
+        // decomposed question - the guard-at-the-call-site mistake that
+        // produced four of the findings in the last audit.
+        //
+        // PRIVACY. The row count is read on this server and never leaves it.
+        // The regenerated prompt carries the question and the schema, exactly
+        // as the first one did, plus one sentence saying the shape was wrong.
+        // No value, no row, no count, and no driver message.
+        if ($retried = $this->retryForShape($queryResult, $rows, $dataset, $metadata)) {
+            return $retried;
         }
 
         // Format response
