@@ -128,7 +128,44 @@ php artisan jeeves:doctor
 ```
 
 It names the real cause of any problem and prints the exact fix. Run it first
-whenever something is wrong.
+whenever something is wrong. It is read-only — it reports and changes nothing.
+
+### Everything the model is told is yours to change
+
+`discover` writes a **starting point, not a verdict**. The files are plain PHP
+config: edit them. Re-run it with `--merge` and your edits survive.
+
+Nothing below needs a code change, a subclass, or a fork.
+
+**Per dataset — `config/jeeves-schemas/*.php`**, where most tuning belongs:
+
+| To change | Set |
+|---|---|
+| What a table is | `description` |
+| What your users call it | `aliases` |
+| What a column means | `columns[].description` |
+| What your users call a column | `columns[].aliases` |
+| What may be measured, grouped, filtered | `aggregatable`, `groupable`, `filterable` |
+| Metrics that are not columns | `computed_metrics` with an `expression` |
+| A rule every query must obey | `required_filter` |
+| Business rules in plain English | `llm_instructions` |
+| Worked examples to imitate | `example_queries` |
+| Joins and related tables | `required_join`, `relationships` |
+| Units on the numbers | `unit` |
+
+**Across the whole project — `config/jeeves.php`:**
+
+| To change | Set |
+|---|---|
+| The opening line of the system prompt | `prompts.system_role` |
+| Context added to every prompt | `system_instructions` |
+| Examples that apply to all datasets | `global_examples` |
+| Which dataset a question routes to | `query_routing` |
+| Row limits | `sql.default_limit`, `sql.max_limit` |
+
+`php artisan jeeves:audit-schema` tells you which descriptions are missing —
+and that curation is what moves accuracy, by the numbers further down this
+page. Full reference: [docs/SCHEMA.md](docs/SCHEMA.md).
 
 ## Ask a question
 
