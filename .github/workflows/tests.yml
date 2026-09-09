@@ -25,26 +25,43 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Laravel 10 and 11 are deliberately absent: both are past security
-        # support and every published version now carries advisories, so
-        # Composer refuses to install them under its default
-        # policy.advisories.block. A version the package manager will not
-        # install is not a version this package can claim to support.
+        # Laravel 11 is supported and tested here with its eyes open.
+        #
+        # It is past security support: `composer audit` on a fresh v11.56.1
+        # reports three advisories - a signed-URL path confusion and a CRLF
+        # injection among them - and every one of them is fixed in the 12.x and
+        # 13.x lines and in no 11.x release, because there will not be another
+        # one. An earlier version of this comment said Composer refuses to
+        # install it. That was true once and is not now; it installs cleanly.
+        #
+        # It is here because most applications are still on it, and a package
+        # that only runs on the two newest majors is not available to the
+        # people who most need to isolate an LLM from their database. The suite
+        # passes on 11 unmodified.
+        #
+        # An adopter on 11 should read that as: this package works, and the
+        # framework under it has unpatched issues that are not this package's
+        # to fix. Laravel 10 stays out - it is further past EOL again.
         php: ['8.2', '8.3', '8.4', '8.5']
-        laravel: [12, 13]
+        laravel: [11, 12, 13]
         dependency-version: [prefer-stable]
         include:
           # Each Laravel release pairs with one Testbench major.
+          - laravel: 11
+            testbench: ^9.0
           - laravel: 12
             testbench: ^10.0
           - laravel: 13
             testbench: ^11.0
           # Lowest allowed dependency versions at both ends of the supported
           # range -  catches "works on my lockfile" breakage in either
-          # direction.
+          # direction. The low end moved to Laravel 11 when 11 was added, so
+          # this runs there: the oldest framework on the oldest PHP with the
+          # oldest dependency of each kind is the combination nobody develops
+          # against and every "it works here" bug hides in.
           - php: '8.2'
-            laravel: 12
-            testbench: ^10.0
+            laravel: 11
+            testbench: ^9.0
             dependency-version: prefer-lowest
           - php: '8.3'
             laravel: 13
@@ -54,6 +71,13 @@ jobs:
           # Laravel 13 requires PHP 8.3+.
           - php: '8.2'
             laravel: 13
+          # Laravel 11 declares php ^8.2, so the matrix would pair it with 8.5.
+          # It shipped before 8.5 existed and will not be patched for it, so
+          # that pairing is untested by Laravel and untestable here - not known
+          # to be broken, just not something this package can vouch for. 8.2
+          # through 8.4 are the versions Laravel 11 was actually built against.
+          - php: '8.5'
+            laravel: 11
 
     steps:
       - name: Checkout
