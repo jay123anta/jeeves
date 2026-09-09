@@ -56,7 +56,7 @@
     "require-dev": {
         "larastan/larastan": "^3.0",
         "laravel/pint": "^1.18",
-        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "orchestra/testbench": "^9.11|^10.0|^11.0",
         "phpunit/phpunit": "^10.5|^11.5|^12.0|^13.0"
     },
     "suggest": {

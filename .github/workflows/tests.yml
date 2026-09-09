@@ -52,8 +52,16 @@ jobs:
         dependency-version: [prefer-stable]
         include:
           # Each Laravel release pairs with one Testbench major.
+          #
+          # Laravel 11 takes ^9.11 rather than ^9.0, and the floor is measured
+          # rather than chosen. Testbench 9.0 through 9.1 call
+          # `static::$latestResponse` in setUp(), a property that later 11.x no
+          # longer declares - every test in the suite errors before it runs.
+          # Views arrive later still: 9.10 and earlier do not compose
+          # InteractsWithViews, so `$this->blade()` is undefined. 9.11 is the
+          # first release with both, and the suite passes on it whole.
           - laravel: 11
-            testbench: ^9.0
+            testbench: ^9.11
           - laravel: 12
             testbench: ^10.0
           - laravel: 13
@@ -66,7 +74,7 @@ jobs:
           # against and every "it works here" bug hides in.
           - php: '8.2'
             laravel: 11
-            testbench: ^9.0
+            testbench: ^9.11
             dependency-version: prefer-lowest
           - php: '8.3'
             laravel: 13
