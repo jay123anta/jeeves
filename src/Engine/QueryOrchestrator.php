@@ -154,7 +154,21 @@ class QueryOrchestrator
     {
         $startTime = microtime(true);
         $queryMode = config('jeeves.query_mode', 'auto');
-        $metadata = ['processing_mode' => $this->llmProvider->getName(), 'query_mode' => $queryMode];
+
+        // The question travels with the metadata from here.
+        //
+        // It was read at the execution point as `$metadata['original_query']`,
+        // which the HTTP controller writes AFTER this method returns - so at
+        // the moment it was needed it was always absent, and the
+        // UnsafeSqlRejected event dispatched with the empty string for the
+        // field its own docblock calls "usually the more telling half". A
+        // listener watching for a burst of refusals from one user got the SQL
+        // and no idea what had been asked to produce it.
+        $metadata = [
+            'processing_mode' => $this->llmProvider->getName(),
+            'query_mode' => $queryMode,
+            'original_query' => $naturalLanguageQuery,
+        ];
 
         // Token counts are per-question, so the running total starts here. The
         // provider is a singleton for the request; without this, the second
