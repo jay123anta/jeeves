@@ -22,8 +22,6 @@ it. The model is sent your schema structure and nothing else.
 <x-jeeves::widget />
 ```
 
-
-
 Almost every "chat with your database" product works by sending rows to a
 model. If the data is under GDPR or DPDP, or belongs to a client who has not
 agreed to that, the conversation ends there.
@@ -47,25 +45,11 @@ Three things follow that a hosted tool cannot offer:
 Groq, OpenRouter - or a model you run yourself on Ollama, vLLM, LM Studio or
 llama.cpp. One config block, no code changes.
 
-People can ask by typing or by speaking - the browser does the listening, so no
-audio reaches your server either.
-
-One line puts a working chat window in any Blade view - thread, follow-up
-questions, microphone, charts:
-
-```blade
-<x-jeeves::widget />
-```
-
-Conversation state is real, and it is resolved in PHP rather than left to the
+**Conversation state is real**, and resolved in PHP rather than left to the
 model: ask *"revenue by city"*, then *"just Guwahati"*, then *"break that down
-by client"*, then rewind. Each turn knows what the last one narrowed to.
-
-Or call it yourself and render the result however you like:
-
-```php
-$result = Jeeves::query("top 5 customers by revenue");
-```
+by client"*, then rewind. Each turn knows what the last one narrowed to. People
+can ask by typing or by speaking, and the browser does the listening, so no
+audio reaches your server either.
 
 ---
 
@@ -258,6 +242,28 @@ Gate::define('viewJeeves', fn ($user) => $user->isAdmin());
 
 Define the gate as soon as this is more than you: an ungated endpoint in
 production is an LLM proxy for the internet.
+
+## What it costs to run
+
+Every question that reaches a model is a paid call, so the defaults are built
+to keep that number down rather than to look fast in a demo.
+
+| | Default | |
+|---|---|---|
+| A repeated question | **0 calls** | Cached for 24h (`cache.ttl`), keyed on the words and the dataset |
+| A new question | 1 call | 2 if verification is on and it rewrites |
+| Self-verification | on | ~200 tokens, a fraction of generation |
+| Ceiling per user per day | 200 | `limits.queries_per_day`, HTTP 429 past it |
+| Burst | 60/min | `throttle:60,1` |
+
+The daily ceiling is applied by the package rather than through
+`routes.middleware`, so customising that array — the first thing anyone does to
+make the widget public — cannot drop it by accident. Set it to `null` for no
+ceiling, deliberately.
+
+`php artisan jeeves:cache-stats` shows whether the cache is earning its keep.
+**Or spend nothing at all:** point `JEEVES_LLM_DRIVER` at Ollama and the only
+cost is your own hardware. → [docs/CACHING.md](docs/CACHING.md)
 
 ---
 
@@ -511,7 +517,7 @@ The parts that are not: SELECT-only validation against a schema-derived
 whitelist, a cache that cannot answer one question with another question's
 result, rate limits reported as rate limits, and a benchmark that tells you how
 often you are wrong. Those took this package many adversarial review rounds and
-784 tests, and every one of them exists because something went wrong first.
+812 tests, and every one of them exists because something went wrong first.
 
 ## Documentation
 
