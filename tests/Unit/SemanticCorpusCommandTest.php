@@ -154,6 +154,61 @@ class SemanticCorpusCommandTest extends TestCase
         );
     }
 
+    /**
+     * Found by the release gate, on a real install rather than a fixture:
+     * `discover` writes the same placeholder for a dataset and for its table,
+     * so an undescribed schema produced "Users. Data from Users. Data from
+     * Users. users" - the same clause weighted twice. Repetition is not
+     * meaning, and it tilts the vector toward whichever dataset repeats most.
+     */
+    #[Test]
+    public function a_sentence_written_twice_is_embedded_once(): void
+    {
+        config()->set('jeeves.schema.config_path', __DIR__ . '/../Stubs/thin-schemas');
+        $this->app->forgetInstance(SchemaRegistry::class);
+
+        $corpus = $this->generate();
+        $text = $corpus['schemes'][0]['text'];
+
+        $this->assertSame(
+            1,
+            substr_count($text, 'Data from Users'),
+            'the placeholder description was embedded more than once: ' . $text
+        );
+    }
+
+    /**
+     * A corpus with nothing in it loads fine and matches almost nothing, which
+     * reads as a broken service rather than an empty one. Say so at the point
+     * the file is written, while the person is still looking.
+     */
+    #[Test]
+    public function it_says_when_a_dataset_has_almost_nothing_to_embed(): void
+    {
+        config()->set('jeeves.schema.config_path', __DIR__ . '/../Stubs/thin-schemas');
+        $this->app->forgetInstance(SchemaRegistry::class);
+
+        Artisan::call('jeeves:semantic-corpus', ['--output' => $this->output]);
+        $out = Artisan::output();
+
+        $this->assertStringContainsString('almost nothing to embed', $out);
+        $this->assertStringContainsString('users', $out);
+        $this->assertStringContainsString('jeeves:audit-schema', $out, 'no route to fixing it was offered');
+    }
+
+    /** The counterweight: a described schema must NOT be warned about. */
+    #[Test]
+    public function a_described_dataset_draws_no_warning(): void
+    {
+        Artisan::call('jeeves:semantic-corpus', ['--output' => $this->output]);
+
+        $this->assertStringNotContainsString(
+            'almost nothing to embed',
+            Artisan::output(),
+            'the warning fires on schemas that are perfectly well described'
+        );
+    }
+
     #[Test]
     public function it_can_print_instead_of_writing(): void
     {

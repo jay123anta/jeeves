@@ -38,6 +38,14 @@ class SemanticCorpusCommand extends Command
 
     protected $description = 'Generate the dataset corpus for a semantic matching service';
 
+    /**
+     * Below this many characters a description carries no signal worth
+     * embedding. Not a tuned constant - a name plus a placeholder sentence
+     * lands around forty characters, and anything written by a human who was
+     * describing their data clears sixty without trying.
+     */
+    private const TOO_LITTLE_TO_EMBED = 60;
+
     public function handle(SchemaRegistry $registry): int
     {
         $datasets = $registry->all();
@@ -58,11 +66,24 @@ class SemanticCorpusCommand extends Command
             'schemes' => [],
         ];
 
+        $thin = [];
+
         foreach ($datasets as $key => $schema) {
+            $text = $this->describe($key, $schema);
+
+            // A matcher ranks by meaning, and there is no meaning in a name
+            // repeated twice. An install that has not written descriptions yet
+            // gets a corpus that technically loads and matches almost nothing -
+            // which looks like a broken service rather than an empty one, so
+            // say it here instead of leaving it to be discovered.
+            if (mb_strlen($text) < self::TOO_LITTLE_TO_EMBED) {
+                $thin[] = $key;
+            }
+
             $corpus['schemes'][] = [
                 'key' => $key,
                 'name' => $schema['name'] ?? $key,
-                'text' => $this->describe($key, $schema),
+                'text' => $text,
             ];
         }
 
@@ -103,6 +124,14 @@ class SemanticCorpusCommand extends Command
         $this->line('Regenerate whenever a schema file changes, or the matcher will keep routing');
         $this->line('to a description of your data that is no longer true.');
 
+        if ($thin !== []) {
+            $this->newLine();
+            $this->warn(count($thin) . ' dataset(s) have almost nothing to embed: ' . implode(', ', $thin));
+            $this->line('Matching works on meaning, and a name repeated twice carries none. Give');
+            $this->line('them a description and column aliases, then regenerate:');
+            $this->line('  <info>php artisan jeeves:audit-schema</info>');
+        }
+
         return self::SUCCESS;
     }
 
@@ -130,35 +159,53 @@ class SemanticCorpusCommand extends Command
             }
         }
 
-        $sentences = implode('. ', array_filter($parts));
+        // Deduplicate the sentences, not just the words. `jeeves:discover`
+        // writes the same placeholder for a dataset and its table, so an
+        // undescribed install produced "Users. Data from Users. Data from
+        // Users." - the same clause weighted three times, which tilts the
+        // vector toward whichever dataset happens to be the most repetitive.
+        $sentences = implode('. ', $this->unique(array_filter($parts)));
 
         $vocabulary = array_merge(
             $schema['aliases'] ?? [],
             $this->columnVocabulary($schema),
         );
 
-        $seen = [];
-        $unique = [];
-
-        foreach ($vocabulary as $word) {
-            if (!is_string($word)) {
-                continue;
-            }
-
-            $word = trim($word);
-            $fold = mb_strtolower($word);
-
-            if ($word === '' || isset($seen[$fold])) {
-                continue;
-            }
-
-            $seen[$fold] = true;
-            $unique[] = $word;
-        }
+        $unique = $this->unique($vocabulary);
 
         return $unique === []
             ? $sentences . '.'
             : $sentences . '. ' . implode(', ', $unique);
+    }
+
+    /**
+     * Case-insensitive dedupe that keeps the first spelling and the order.
+     *
+     * @param  array<int, mixed>  $values
+     * @return array<int, string>
+     */
+    protected function unique(array $values): array
+    {
+        $seen = [];
+        $out = [];
+
+        foreach ($values as $value) {
+            if (!is_string($value)) {
+                continue;
+            }
+
+            $value = trim($value);
+            $fold = mb_strtolower($value);
+
+            if ($value === '' || isset($seen[$fold])) {
+                continue;
+            }
+
+            $seen[$fold] = true;
+            $out[] = $value;
+        }
+
+        return $out;
     }
 
     /**
