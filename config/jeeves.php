@@ -250,6 +250,82 @@ return [
     ],
 
     // ==========================================================================
+    // SEMANTIC DATASET MATCHING (optional, off by default)
+    // ==========================================================================
+    // A middle step between the keyword routing above and the LLM.
+    //
+    // Routing above matches WORDS. Ask "how many houses were built" of a
+    // dataset whose aliases are 'dwellings' and 'construction' and nothing
+    // matches, so the question goes to the LLM to be placed - a second API
+    // call, on every question your aliases happen not to cover.
+    //
+    // This stage matches MEANING instead, by asking an embedding service you
+    // run which dataset a question is closest to. When it is confident, the
+    // LLM call for dataset identification is skipped entirely.
+    //
+    // EXACT ALWAYS WINS. This is consulted only after query_routing, schema
+    // aliases and column aliases have all missed, so switching it on cannot
+    // change a question the package already routes correctly. And when it is
+    // off, unreachable, or unsure, the question takes exactly the route it
+    // takes today. It can only ever ADD a route, never remove one.
+    //
+    // NO MODEL SHIPS WITH THIS PACKAGE. Bundling a sentence-transformer would
+    // add hundreds of megabytes for a feature most installs never enable. What
+    // ships is the client. You point it at a small service of your own that
+    // answers POST {endpoint}{path} with `{"query": "..."}` and returns a
+    // ranked list - `{"top_n": [{"dataset": "orders", "score": 0.42}, ...]}`.
+    // `scheme` is accepted in place of `dataset` for services already written
+    // against that spelling.
+    //
+    // PRIVACY (Rule 2). The request carries the question text and nothing
+    // else - the same text sent to your LLM provider on the very next line if
+    // this stage declines. No rows, no values, no counts. The service decides
+    // nothing on its own: it ranks, and the threshold below is applied here.
+    'semantic_matching' => [
+        'enabled' => (bool) env('JEEVES_SEMANTIC_MATCH_ENABLED', false),
+
+        // local_minilm | http  - both speak the JSON contract above.
+        // Anything else, including 'none', disables the stage.
+        'driver' => env('JEEVES_SEMANTIC_MATCH_DRIVER', 'local_minilm'),
+
+        'endpoint' => env('JEEVES_SEMANTIC_MATCH_ENDPOINT', 'http://127.0.0.1:8001'),
+        'path' => env('JEEVES_SEMANTIC_MATCH_PATH', '/match-scheme'),
+
+        // Informational. The client never sends this - the service loads
+        // whatever model it was built with. It is recorded so the model your
+        // endpoint is EXPECTED to run is written down next to the threshold
+        // that was tuned for it, because the two only make sense together.
+        'model' => env('JEEVES_SEMANTIC_MATCH_MODEL', 'all-MiniLM-L6-v2'),
+
+        // Cosine score a match must reach before it is acted on.
+        //
+        // 0.3 rather than 0.5 because short dataset descriptions produce low
+        // absolute scores on all-MiniLM-L6-v2 - correct matches land around
+        // 0.26-0.48, so 0.5 rejects most of them. Retune whenever the model or
+        // the descriptions change; the two belong together.
+        'threshold' => (float) env('JEEVES_SEMANTIC_MATCH_THRESHOLD', 0.3),
+
+        // Seconds. Deliberately small: this stage runs BEFORE the LLM call it
+        // exists to save, so its worst case is added latency on a question
+        // that was going to be answered anyway.
+        'timeout' => (int) env('JEEVES_SEMANTIC_MATCH_TIMEOUT', 2),
+
+        // What happens when nothing clears the threshold, or the service is
+        // down, slow or unreachable:
+        //
+        //   'llm'           = carry on to the LLM, exactly as an install
+        //                     without this feature does (DEFAULT). Purely
+        //                     additive: a semantic miss costs the timeout and
+        //                     changes no answer.
+        //   'clarification' = do not call the LLM; ask the user which dataset
+        //                     they meant. Never guesses, but it TRUNCATES the
+        //                     cascade - questions the LLM used to place on its
+        //                     own now come back as a question. Only sensible
+        //                     where a wrong dataset is worse than a prompt.
+        'fallback' => env('JEEVES_SEMANTIC_MATCH_FALLBACK', 'llm'),
+    ],
+
+    // ==========================================================================
     // GLOBAL EXAMPLE QUERIES (Multi-Dataset)
     // ==========================================================================
     // Example queries that span MULTIPLE datasets or help the AI understand

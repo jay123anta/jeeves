@@ -5,6 +5,48 @@ All notable changes to `jayanta/jeeves` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Runs on Laravel 11
+
+The constraint is `^11.0|^12.0|^13.0` and CI tests all three. Laravel 11 is
+past security support, so every published 11.x carries advisories that will
+never be fixed and recent Composer refuses to resolve them by default. If your
+`composer require` is blocked, the README says why and what to set — the block
+comes from your framework, not from this package, and it applies to every
+package you install.
+
+### It asks again when the shape of an answer contradicts the question
+
+*"Which carrier shipped the most orders"* has one answer. Models routinely write
+it without the `LIMIT`, so the top row is right and every row under it is wrong.
+Nothing about that is visible before execution, which is why the SQL verifier
+cannot catch it — the SQL is valid.
+
+The row count is now inspected **on your own server** and, when a question that
+asks for one thing came back as a list, the query is regenerated once. The retry
+prompt carries the question, the schema and one sentence about the shape. No
+value, no row, no count.
+
+### Semantic dataset matching, off by default
+
+An optional stage between keyword routing and the model: an embedding service
+you run is asked which dataset a question is closest to, and a confident answer
+skips the model call that would otherwise be spent just placing it.
+
+**No model or container ships with this** — the client is about 10 KB and adds
+no dependency. Exact routing always wins, and a miss, a timeout or an outage
+leaves the question on exactly the route it takes today. It can add a route,
+never remove one. See `semantic_matching` in the config.
+
+### Fixed
+
+- The security event raised for rejected SQL carried an empty question, so the
+  one record of an unsafe generation did not say what had been asked.
+- Feedback corrections are screened again where they are replayed into a prompt,
+  not only where they are submitted — rows written before that check existed
+  were reaching prompts unscreened.
+
 ## [1.0.0] - 2026-09-07
 
 First release.

@@ -18,6 +18,7 @@ use Jayanta\Jeeves\Console\InstallCommand;
 use Jayanta\Jeeves\Contracts\LlmProviderInterface;
 use Jayanta\Jeeves\Contracts\QueryCacheInterface;
 use Jayanta\Jeeves\Contracts\SchemaIntrospectorInterface;
+use Jayanta\Jeeves\Contracts\SemanticMatcherInterface;
 use Jayanta\Jeeves\Contracts\SqlValidatorInterface;
 use Jayanta\Jeeves\Conversation\ConversationManager;
 use Jayanta\Jeeves\Engine\DatasetSeeder;
@@ -29,6 +30,8 @@ use Jayanta\Jeeves\Engine\QueryOrchestrator;
 use Jayanta\Jeeves\Engine\QueryPlanner;
 use Jayanta\Jeeves\Engine\QueryVerifier;
 use Jayanta\Jeeves\Engine\ResponseFormatter;
+use Jayanta\Jeeves\Engine\Semantic\HttpSemanticMatcher;
+use Jayanta\Jeeves\Engine\Semantic\NullSemanticMatcher;
 use Jayanta\Jeeves\Engine\SqlBuilder;
 use Jayanta\Jeeves\Engine\StepSynthesizer;
 use Jayanta\Jeeves\Feedback\FeedbackStore;
@@ -145,6 +148,41 @@ class JeevesServiceProvider extends ServiceProvider
         // anything on $this, which is what lets a step of a multi-step
         // answer call them again cleanly.
         $this->app->singleton(DatasetSeeder::class);
+
+        // Semantic dataset matching (opt-in, off by default).
+        //
+        // The default binding is the null matcher, so an install that never
+        // sets JEEVES_SEMANTIC_MATCH_ENABLED opens no socket and behaves
+        // exactly as it did before this existed. `enabled` is checked HERE
+        // rather than in the caller so there is one place that decides whether
+        // this stage is live - a caller that checked config itself would be a
+        // second decision point to keep in step, which is how a feature ends
+        // up half-disabled.
+        //
+        // Singleton because both drivers are stateless: they memoise nothing
+        // on $this, so a step of a multi-step answer can call match() again
+        // cleanly - the same reasoning DatasetSeeder is bound on above.
+        $this->app->singleton(SemanticMatcherInterface::class, function ($app) {
+            $config = $app['config']->get('jeeves.semantic_matching', []);
+
+            if (!($config['enabled'] ?? false)) {
+                return new NullSemanticMatcher;
+            }
+
+            return match ($config['driver'] ?? 'none') {
+                'local_minilm', 'http' => new HttpSemanticMatcher(
+                    endpoint: $config['endpoint'] ?? 'http://127.0.0.1:8001',
+                    threshold: (float) ($config['threshold'] ?? 0.3),
+                    timeout: (int) ($config['timeout'] ?? 2),
+                    path: $config['path'] ?? '/match-scheme',
+                ),
+                // An unknown driver name is a configuration mistake, and the
+                // safe reading of one is "match nothing" rather than "guess a
+                // driver". jeeves:doctor is where it gets reported.
+                default => new NullSemanticMatcher,
+            };
+        });
+
         $this->app->singleton(PromptBudget::class, function ($app) {
             // The env var is consulted directly when the published config has
             // no such key. mergeConfigFrom is ONE LEVEL deep, so an app that

@@ -10,8 +10,10 @@ use Jayanta\Jeeves\Contracts\LlmProviderInterface;
 use Jayanta\Jeeves\Contracts\QueryCacheInterface;
 use Jayanta\Jeeves\Contracts\ReportsUsage;
 use Jayanta\Jeeves\Contracts\ScopesCacheByDataset;
+use Jayanta\Jeeves\Contracts\SemanticMatcherInterface;
 use Jayanta\Jeeves\Contracts\SqlValidatorInterface;
 use Jayanta\Jeeves\Conversation\QueryState;
+use Jayanta\Jeeves\Engine\Semantic\NullSemanticMatcher;
 use Jayanta\Jeeves\Events\QuestionAnswered;
 use Jayanta\Jeeves\Events\QuestionAsked;
 use Jayanta\Jeeves\Events\QuestionFailed;
@@ -89,6 +91,13 @@ class QueryOrchestrator
 
     protected ?PromptBudget $budget;
 
+    // Opt-in semantic dataset matching. Nullable and last, same reason as the
+    // rest: an orchestrator built by hand against the previous constructor
+    // keeps working, with this stage simply never consulted. The container
+    // always binds SOMETHING (NullSemanticMatcher when the feature is off), so
+    // null here means "constructed without it", not "disabled".
+    protected ?SemanticMatcherInterface $semanticMatcher;
+
     /**
      * True while the steps of a decomposed question are being answered.
      *
@@ -119,7 +128,8 @@ class QueryOrchestrator
         ?NextStepSuggester $suggester = null,
         ?IntentCoverage $coverage = null,
         ?DatasetSeeder $seeder = null,
-        ?PromptBudget $budget = null
+        ?PromptBudget $budget = null,
+        ?SemanticMatcherInterface $semanticMatcher = null
     ) {
         $this->llmProvider = $llmProvider;
         $this->cache = $cache;
@@ -141,6 +151,7 @@ class QueryOrchestrator
 
         $this->seeder = $seeder;
         $this->budget = $budget;
+        $this->semanticMatcher = $semanticMatcher;
     }
 
     /**
@@ -1393,11 +1404,42 @@ class QueryOrchestrator
             ]);
         }
 
-        // Step 1: Identify the dataset (priority: hint → routing → keywords → LLM intent)
+        // Step 1: Identify the dataset
+        // (priority: hint → routing → keywords → semantic → LLM intent)
         $dataset = $datasetHint;
         if (!$dataset || !$this->registry->has($dataset)) {
             // Try keyword/routing detection first (fast, no API call)
             $dataset = $this->seeder?->detect($query);
+        }
+
+        // Semantic matching, when an install has opted into it. It sits HERE
+        // and nowhere earlier because exact routing must always win: a
+        // question the aliases already place correctly must not be re-decided
+        // by a similarity score.
+        //
+        // It sits here and nowhere LATER because the call below is the one it
+        // exists to save. A confident match answers "which dataset" without
+        // spending a provider call on the question.
+        //
+        // It is deliberately absent from DatasetSeeder::detect(). That method
+        // also feeds resolveAskingDataset(), which decides whether a cached
+        // answer belongs to THIS question's dataset - a guard against replaying
+        // one dataset's numbers for another. Wiring a similarity score into a
+        // guard against confidently-wrong answers would be the exact failure
+        // §0 names as the worst one. Keyword detection is exact and can be
+        // trusted there; this cannot, so it stays on the generation path.
+        if (!$dataset || !$this->registry->has($dataset)) {
+            if ($semantic = $this->matchDatasetSemantically($query, $metadata)) {
+                $dataset = $semantic;
+            } elseif ($this->semanticStageIsLive() && $this->semanticFallback() === 'clarification') {
+                // Configured never to guess. The LLM below would place this
+                // question on its own, so this genuinely gives something up -
+                // which is why 'llm' is the default and this is opt-in.
+                return $this->formatter->formatClarification(
+                    ['clarification_type' => 'dataset'],
+                    $this->registry->getAvailableDatasets()
+                );
+            }
         }
 
         if (!$dataset || !$this->registry->has($dataset)) {
@@ -1980,6 +2022,82 @@ class QueryOrchestrator
     {
         $metadata['cache_hit'] = true;
         $metadata['cache_match_type'] = $cached['cache_match_type'] ?? null;
+    }
+
+    /**
+     * Whether the semantic stage is actually configured to run.
+     *
+     * The container binds NullSemanticMatcher when the feature is off, so the
+     * null object IS the off state and asking about it is the honest question.
+     * This matters for the fallback policy: 'clarification' must never fire on
+     * an install that has not enabled semantic matching at all, or every
+     * question the LLM used to place would come back as a prompt.
+     */
+    protected function semanticStageIsLive(): bool
+    {
+        return $this->semanticMatcher !== null
+            && !$this->semanticMatcher instanceof NullSemanticMatcher;
+    }
+
+    /** Below-threshold / service-down policy: 'llm' (default) or 'clarification'. */
+    protected function semanticFallback(): string
+    {
+        $fallback = config('jeeves.semantic_matching.fallback', 'llm');
+
+        // Anything unrecognised reads as the additive default. A typo in this
+        // setting must not be a way to accidentally truncate the cascade.
+        return $fallback === 'clarification' ? 'clarification' : 'llm';
+    }
+
+    /**
+     * The dataset an embedding service places this question in, or null.
+     *
+     * Null covers every outcome that is not a confident, registered match:
+     * the stage is off, nothing cleared the threshold, the service was
+     * unreachable, or it named a dataset this install does not have. The
+     * caller treats all of them the same way, which is the point - there is no
+     * outcome here that can break a question, only one that can save a call.
+     *
+     * Rule 8. The metadata records the score that came BACK, and is written
+     * only on the branch that actually routed on it. A question placed by the
+     * LLM carries nothing from here, so `_dataset_via` never claims a route
+     * the answer did not take.
+     */
+    protected function matchDatasetSemantically(string $query, array &$metadata): ?string
+    {
+        if (!$this->semanticStageIsLive()) {
+            return null;
+        }
+
+        $result = $this->semanticMatcher->match($query, array_keys($this->registry->all()));
+
+        if (!$result->confident || $result->dataset === null) {
+            Log::debug('[Jeeves] Semantic matching did not place the question', [
+                'question' => QuestionForLog::text($query),
+                'best_score' => $result->score,
+                'error' => $result->error,
+            ]);
+
+            return null;
+        }
+
+        // The matcher filters against the allowed set already. This is the
+        // second check, and it is not redundant: `allowed` is a list of keys
+        // and has() is the registry's own answer about whether that key can be
+        // loaded. A guard on the thing guarded, not on the argument passed.
+        if (!$this->registry->has($result->dataset)) {
+            return null;
+        }
+
+        Log::info('[Jeeves] Semantic matching placed the question', [
+            'dataset' => $result->dataset,
+            'score' => $result->score,
+        ]);
+
+        $metadata['_dataset_via'] = 'semantic';
+        $metadata['_dataset_score'] = $result->score;
+
+        return $result->dataset;
     }
 
     protected function resolveAskingDataset(string $query, ?string $datasetHint, array $context = []): ?string

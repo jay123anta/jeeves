@@ -290,6 +290,54 @@ ceiling, deliberately.
 **Or spend nothing at all:** point `JEEVES_LLM_DRIVER` at Ollama and the only
 cost is your own hardware. → [docs/CACHING.md](docs/CACHING.md)
 
+### Matching by meaning, to skip the routing call (optional, off)
+
+Routing matches **words**. Ask *"how many houses were built"* of a dataset
+whose aliases are `dwellings` and `sanctioned units` and nothing matches, so the
+question goes to the model just to be *placed* — a call before the call that
+answers it.
+
+Jeeves can ask an embedding service you run which dataset a question is closest
+to, and skip that first call when it is confident:
+
+```dotenv
+JEEVES_SEMANTIC_MATCH_ENABLED=true
+JEEVES_SEMANTIC_MATCH_ENDPOINT=http://127.0.0.1:8001
+JEEVES_SEMANTIC_MATCH_THRESHOLD=0.3
+JEEVES_SEMANTIC_MATCH_FALLBACK=llm      # llm | clarification
+```
+
+**No model ships with this package.** Bundling a sentence-transformer would add
+hundreds of megabytes for something most installs never switch on — the client
+is about 10 KB and adds no dependency. You point it at a small service of your
+own that answers `POST /match-scheme` with `{"query": "..."}` and returns
+`{"top_n": [{"dataset": "orders", "score": 0.42}, ...]}`. `scheme` is accepted
+in place of `dataset`, so a service already written against that spelling works
+unchanged.
+
+It can only ever **add** a route, never remove one:
+
+| | |
+|---|---|
+| An alias already matches | Never consulted — exact always wins |
+| Confident match | Dataset settled, **routing call skipped** |
+| Below `THRESHOLD` | Falls through to the model, as today |
+| Service down or slow | Falls through to the model, as today |
+| Names a dataset you do not have | Discarded |
+| Feature off | No socket is opened |
+
+The threshold is applied in PHP, not in the service, so retuning confidence
+never means redeploying anything. `0.3` rather than `0.5` because short dataset
+descriptions score low on MiniLM — correct matches land around `0.26–0.48`.
+
+Set `FALLBACK=clarification` to ask the user instead of guessing. It genuinely
+gives something up: questions the model used to place on its own come back as a
+prompt. `llm` is the default for that reason.
+
+**The request carries the question text and nothing else** — the same text your
+LLM provider gets a line later if this stage declines. No rows, no values, not
+even the list of your dataset names, which is filtered on your own server.
+
 ---
 
 ## Which tables it can see
