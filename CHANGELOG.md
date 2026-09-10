@@ -39,6 +39,13 @@ no dependency. Exact routing always wins, and a miss, a timeout or an outage
 leaves the question on exactly the route it takes today. It can add a route,
 never remove one. See `semantic_matching` in the config.
 
+`php artisan jeeves:semantic-corpus` writes the descriptions such a service
+ranks against, generated from your own schema files — orders and tickets in one
+application, patients and claims in another. Nothing about the matching is
+specific to any domain, and no corpus is bundled, because a shipped one would
+describe nobody's data. It writes names, descriptions and the aliases your users
+type, and never opens a database connection.
+
 ### Fixed
 
 - The security event raised for rejected SQL carried an empty question, so the

@@ -315,6 +315,22 @@ own that answers `POST /match-scheme` with `{"query": "..."}` and returns
 in place of `dataset`, so a service already written against that spelling works
 unchanged.
 
+**It describes your datasets, whatever they are.** The service ranks a question
+against one short description per dataset, and those have to be *yours* — orders
+and tickets in one app, patients and claims in another. Generate them from your
+own schema files rather than writing them by hand:
+
+```bash
+php artisan jeeves:semantic-corpus            # → storage/app/jeeves/semantic-corpus.json
+php artisan jeeves:semantic-corpus --stdout   # or pipe it somewhere
+```
+
+Mount that file into your service and restart it — the corpus is embedded once
+at startup. **Regenerate whenever a schema file changes**, or the matcher keeps
+routing against a description of your data that is no longer true. It writes
+names, descriptions and the aliases your users type; it never opens a database
+connection, so no row can reach it.
+
 It can only ever **add** a route, never remove one:
 
 | | |
@@ -327,8 +343,12 @@ It can only ever **add** a route, never remove one:
 | Feature off | No socket is opened |
 
 The threshold is applied in PHP, not in the service, so retuning confidence
-never means redeploying anything. `0.3` rather than `0.5` because short dataset
-descriptions score low on MiniLM — correct matches land around `0.26–0.48`.
+never means redeploying anything. **Tune it against your own corpus**, because
+the scores depend on how much you have written: measured on MiniLM, correct
+matches landed at `0.22–0.33` against terse scheme descriptions and `0.17–0.50`
+against a different set. `0.3` is a reasonable start, `0.5` is too strict for
+short descriptions, and `jeeves:semantic-corpus --stdout` shows you exactly what
+is being embedded.
 
 Set `FALLBACK=clarification` to ask the user instead of guessing. It genuinely
 gives something up: questions the model used to place on its own come back as a
@@ -616,6 +636,7 @@ php artisan jeeves:benchmark      # how accurate is it on YOUR schema?
 php artisan jeeves:debug "…"      # the exact prompt, and which route it takes
 php artisan jeeves:cache-stats    # is the cache earning its keep?
 php artisan jeeves:cache-cleanup  # prune it
+php artisan jeeves:semantic-corpus # describe your datasets for a matching service
 ```
 
 `discover` → `audit-schema` → write the descriptions it asks for → `benchmark`

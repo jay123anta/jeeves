@@ -15,6 +15,7 @@ use Jayanta\Jeeves\Console\DebugPromptCommand;
 use Jayanta\Jeeves\Console\DiscoverSchemaCommand;
 use Jayanta\Jeeves\Console\DoctorCommand;
 use Jayanta\Jeeves\Console\InstallCommand;
+use Jayanta\Jeeves\Console\SemanticCorpusCommand;
 use Jayanta\Jeeves\Contracts\LlmProviderInterface;
 use Jayanta\Jeeves\Contracts\QueryCacheInterface;
 use Jayanta\Jeeves\Contracts\SchemaIntrospectorInterface;
@@ -251,6 +252,7 @@ class JeevesServiceProvider extends ServiceProvider
                 CacheStatsCommand::class,
                 DebugPromptCommand::class,
                 DoctorCommand::class,
+                SemanticCorpusCommand::class,
             ]);
         }
     }

@@ -55,9 +55,25 @@ abstract class TestCase extends BaseTestCase
 
         $file = sys_get_temp_dir() . '/nq_' . getmypid() . '_' . (++$seq) . '.sqlite';
 
-        if (!file_exists($file)) {
-            touch($file);
+        // This name is NOT unique across runs. A crashed or interrupted run
+        // leaves its file behind, and process IDs get reused - so a later run
+        // can land on exactly this name and, before this delete existed,
+        // ADOPTED that database instead of starting a clean one.
+        //
+        // The symptom is nothing like the cause: the connection works, some
+        // tables are there, and a test fails hundreds of lines away with
+        // "no such table: cache". Nearly 24,000 leftovers had accumulated
+        // here, which is enough for that collision to stop being rare.
+        //
+        // If the file cannot be removed - Windows holds a lock on a database
+        // some other process still has open - take a name nothing can already
+        // be holding, rather than inheriting whatever is inside it.
+        if (file_exists($file) && !@unlink($file)) {
+            $file = sys_get_temp_dir() . '/nq_' . getmypid() . '_' . $seq
+                . '_' . bin2hex(random_bytes(4)) . '.sqlite';
         }
+
+        touch($file);
 
         $this->beforeApplicationDestroyed(static function () use ($file) {
             @unlink($file);
