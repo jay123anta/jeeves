@@ -324,6 +324,11 @@ aliased `invoices`. Words under five letters are never fuzzed (`sales` and
 goes to the model instead of being guessed. Exact routing always wins, and this
 runs before semantic matching below because an edit distance costs nothing.
 
+Both stages apply to questions answered by SQL generation, where placing a
+question would otherwise cost a call of its own. A simple question on the
+intent route is placed by the model in the same call that reads the rest of
+it, so neither stage is consulted there - and neither has a call to save.
+
 ### Matching by meaning, to skip the routing call (optional, off)
 
 Routing matches **words**. Ask *"how many houses were built"* of a dataset

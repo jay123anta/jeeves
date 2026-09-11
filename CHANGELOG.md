@@ -14,7 +14,9 @@ two from one dataset's name or alias is routed there locally - no service, no
 provider call. Words under five letters are never fuzzed, and a misspelling two
 datasets match equally well is left to the model rather than guessed. It runs on
 the generation path only, never inside the check that decides whether a cached
-answer belongs to the question being asked.
+answer belongs to the question being asked. Like semantic matching, it applies
+to questions answered by SQL generation; on the intent route the model places
+the question in the call it makes anyway.
 
 ### A renamed or variant-spelled value still finds its rows
 

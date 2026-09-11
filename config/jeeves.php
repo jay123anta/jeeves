@@ -286,6 +286,11 @@ return [
     // misses an alias spelled "invoices" by one letter and the question goes
     // to the LLM just to be placed.
     //
+    // That placement call exists only when a question goes to SQL generation.
+    // On the intent route the model places the question in the same call that
+    // reads the rest of it, so neither this stage nor semantic matching below
+    // is consulted there.
+    //
     // When enabled, a question whose words are within a small edit distance of
     // ONE dataset's name or alias is routed there - locally, with no call.
     // Words under five letters are never fuzzed ("sales" and "scale" are one
