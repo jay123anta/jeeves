@@ -194,6 +194,49 @@ class DiscoverSchemaCommandTest extends TestCase
         $this->assertArrayNotHasKey('aggregatable', $columns['customer_name']);
     }
 
+    /**
+     * A foreign key is an identifier, not a quantity.
+     *
+     * The introspector suggests a role from the column's TYPE, and an integer
+     * foreign key looks exactly like a count - so it came back 'measure'.
+     * Discovery already knows better: it writes the JOIN for that very column.
+     * Found on a real database, a music store, where every `*Id` column was
+     * listed as a measure: the model was offered "total of CustomerId" and "top
+     * artists by ArtistId", and the schema audit asked for a unit on each one.
+     */
+    #[Test]
+    public function a_foreign_key_is_never_a_measure(): void
+    {
+        $introspector = Mockery::mock(SchemaIntrospectorInterface::class);
+        $introspector->shouldReceive('getDriver')->andReturn('sqlite');
+        $introspector->shouldReceive('getDialect')->andReturn('sqlite');
+        $introspector->shouldReceive('getSchemas')->andReturn(['main']);
+        $introspector->shouldReceive('listTables')->andReturn([
+            ['name' => 'orders', 'short_name' => 'orders', 'type' => 'table', 'row_estimate' => 10, 'comment' => ''],
+        ]);
+        $introspector->shouldReceive('getRelationships')->andReturnUsing(fn ($table) => $table === 'orders'
+            ? [['column' => 'customer_id', 'referenced_table' => 'customers', 'referenced_column' => 'id', 'constraint_name' => 'fk_orders_customer']]
+            : []);
+        $introspector->shouldReceive('getColumns')->andReturn([
+            ['name' => 'customer_name', 'type' => 'varchar', 'comment' => '', 'suggested_role' => 'dimension'],
+            ['name' => 'customer_id', 'type' => 'integer', 'comment' => '', 'suggested_role' => 'measure'],
+            ['name' => 'revenue', 'type' => 'decimal', 'comment' => '', 'suggested_role' => 'measure'],
+        ]);
+        $this->app->instance(SchemaIntrospectorInterface::class, $introspector);
+
+        $this->runDiscover()->assertExitCode(0);
+
+        $columns = $this->loadGenerated()['tables']['primary']['columns'];
+
+        $this->assertArrayNotHasKey('aggregatable', $columns['customer_id'], 'a foreign key was offered as something to SUM');
+        $this->assertArrayNotHasKey('sortable', $columns['customer_id'], 'a foreign key was offered as something to rank by');
+        $this->assertTrue($columns['customer_id']['filterable'] ?? false, 'a foreign key should still be filterable');
+        $this->assertStringContainsString('customers', $columns['customer_id']['description'], 'the description does not say what it links to');
+
+        // Counterweight: a real measure in the same table is still a measure.
+        $this->assertTrue($columns['revenue']['aggregatable'] ?? false, 'the fix took a genuine measure with it');
+    }
+
     #[Test]
     public function framework_tables_are_skipped_by_default()
     {

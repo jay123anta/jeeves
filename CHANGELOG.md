@@ -73,6 +73,20 @@ The old `district` key, which `LlmProviderInterface` still listed until this
 release, is no longer read, and a provider that still returns it will have
 that filter ignored. Every bundled provider already returned `group_value`.
 
+### Fixed: a foreign key is no longer offered as a measure
+
+`jeeves:discover` marked integer foreign-key columns as measures, because
+the database reports only their type and an integer id looks like a count.
+On a real music-store database every `*Id` column was offered as something to
+total or rank by, and `jeeves:audit-schema` asked for a unit on each. A
+foreign key is now written as filterable, with a note saying which table it
+links to.
+
+Existing schema files keep what they say: `--merge` deliberately preserves
+`aggregatable` and `sortable` as curation, so it will not remove them. Delete
+those two keys from foreign-key columns by hand, or regenerate files you have
+not curated with `--force`.
+
 ## [1.1.0] - 2026-09-10
 
 ### Runs on Laravel 11

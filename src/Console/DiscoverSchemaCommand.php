@@ -398,6 +398,17 @@ class DiscoverSchemaCommand extends Command
 
         $groupColumn = $this->guessGroupColumn($columns);
 
+        // This table's foreign keys, by local column. The introspector
+        // suggests a role from a column's TYPE, and an integer foreign key
+        // looks exactly like a count; the relationships say what it is.
+        $foreignKeys = [];
+
+        foreach ($relationships as $rel) {
+            if (!empty($rel['column']) && !empty($rel['referenced_table'])) {
+                $foreignKeys[(string) $rel['column']] = (string) $rel['referenced_table'];
+            }
+        }
+
         $columnDefs = [];
         foreach ($columns as $col) {
             $definition = [
@@ -405,7 +416,22 @@ class DiscoverSchemaCommand extends Command
                 'description' => $col['comment'] ?: ucwords(str_replace('_', ' ', $col['name'])),
             ];
 
-            switch ($col['suggested_role'] ?? null) {
+            $role = $col['suggested_role'] ?? null;
+
+            // An identifier that links to another table is something to
+            // filter or join on, never something to add up or rank by. Left
+            // as a measure, a music-store database offered the model "total
+            // of CustomerId" and "top artists by ArtistId", and the schema
+            // audit asked for a unit on every one of them.
+            //
+            // Only the MEASURE suggestion is overridden. A text foreign key
+            // such as a country code can be a perfectly good dimension, and
+            // grouping by it stays allowed.
+            if ($role === 'measure' && isset($foreignKeys[$col['name']])) {
+                $role = 'foreign_key';
+            }
+
+            switch ($role) {
                 case 'dimension':
                     $definition['filterable'] = true;
                     $definition['groupable'] = true;
@@ -414,6 +440,10 @@ class DiscoverSchemaCommand extends Command
                     // Drives SUM + GROUP BY on transactional tables. See README.
                     $definition['aggregatable'] = true;
                     $definition['sortable'] = true;
+                    break;
+                case 'foreign_key':
+                    $definition['filterable'] = true;
+                    $definition['description'] .= ' (links to ' . $foreignKeys[$col['name']] . ')';
                     break;
                 case 'date_filter':
                     $definition['filterable'] = true;
