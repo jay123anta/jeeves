@@ -190,6 +190,20 @@ class BenchmarkCommand extends Command
         }
 
         if (($answer['status'] ?? null) !== 'success') {
+            // A clarification is the model asking instead of answering, and its
+            // text is in `message`, not `error`. Reading only `error` reported
+            // every clarification as a bare "no answer" - on a real database it
+            // hid that the model had asked which metric was meant. Still graded
+            // as not correct: a question is not an answer.
+            if (($answer['status'] ?? null) === 'clarification_needed') {
+                $tick('<fg=yellow>asked instead</>');
+
+                return array_merge($row, [
+                    'reason' => 'asked for clarification: ' . ($answer['message'] ?? 'no message'),
+                    'error_code' => $answer['error_code'] ?? null,
+                ]);
+            }
+
             $tick('<fg=red>no answer</>');
 
             return array_merge($row, ['reason' => $answer['error'] ?? 'no answer', 'error_code' => $answer['error_code'] ?? null]);

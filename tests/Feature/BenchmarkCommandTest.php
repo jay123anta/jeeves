@@ -212,4 +212,33 @@ class BenchmarkCommandTest extends TestCase
         $this->assertTrue($c->matches([(object) ['v' => 350.001]], [(object) ['v' => 350.004]]));
         $this->assertFalse($c->matches([(object) ['v' => 350]], [(object) ['v' => 351]]));
     }
+
+    /**
+     * A clarification is the model ASKING instead of answering, and its text
+     * is in `message`, not `error`. Reading only `error` reported every
+     * clarification as a bare "no answer". Found on a real database: the
+     * report said nothing where the model had asked which metric was meant.
+     * Still graded as not correct - a question is not an answer - but now it
+     * says so.
+     */
+    #[Test]
+    public function a_clarification_is_reported_as_the_question_it_was()
+    {
+        $this->seedOrders();
+
+        $p = new RecordingProvider;
+        $p->sqlResponse = [
+            'success' => true,
+            'data' => ['error' => 'ambiguous', 'needs_clarification' => true, 'clarification_type' => 'metric'],
+        ];
+        $this->app->instance(LlmProviderInterface::class, $p);
+
+        $this->writeQuestions("[['question' => 'total revenue', 'gold' => 'SELECT SUM(revenue) AS r FROM nq_orders']]");
+
+        $out = $this->bench();
+
+        $this->assertStringContainsString('0/1 correct', $out);
+        $this->assertStringContainsString('asked for clarification', $out, 'a clarification was reported as silence');
+        $this->assertStringContainsString('What metric', $out, "the model's actual question is missing from the report");
+    }
 }

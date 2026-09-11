@@ -87,6 +87,13 @@ Existing schema files keep what they say: `--merge` deliberately preserves
 those two keys from foreign-key columns by hand, or regenerate files you have
 not curated with `--force`.
 
+### Fixed: `jeeves:benchmark` says when the model asked instead of answering
+
+A clarification was reported as a bare "no answer", because the command read
+only `error` and a clarification carries its text in `message`. It is now
+reported as `asked for clarification: <the question it asked>`. It still counts
+as not correct.
+
 ## [1.1.0] - 2026-09-10
 
 ### Runs on Laravel 11
