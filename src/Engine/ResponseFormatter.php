@@ -243,13 +243,81 @@ class ResponseFormatter
     }
 
     /**
+     * The column in the executed row that holds the measure.
+     *
+     * The metric name is a PLAN: SqlBuilder's alias on the intent route, the
+     * model's own claim on the SQL route, and the model does not always alias
+     * its aggregate to match. "How many albums does Iron Maiden have" returned
+     * `COUNT(T1.AlbumId)` while claiming `album_count`, so the value read
+     * "N/A" and the count itself became the label. The named column is used
+     * when the row has it, in any case; otherwise the last numeric column,
+     * which is where a measure sits after its labels.
+     *
+     * @param  array<string, mixed>  $row
+     */
+    protected function measureColumn(array $row, string $metric): ?string
+    {
+        foreach ([$metric, "total_{$metric}"] as $named) {
+            foreach (array_keys($row) as $column) {
+                if (strcasecmp((string) $column, $named) === 0) {
+                    return (string) $column;
+                }
+            }
+        }
+
+        $measure = null;
+
+        foreach ($row as $column => $value) {
+            if (is_numeric($value)) {
+                $measure = (string) $column;
+            }
+        }
+
+        return $measure;
+    }
+
+    /**
+     * What to call the measure in the answer sentence.
+     *
+     * The schema's description is kept when the row holds the column it
+     * describes. Otherwise the name comes from the column that ran - never
+     * from the model's `explanation`, which the prompt asks for as a sentence
+     * about the query and which read "Top 3 by This query retrieves the top 3
+     * genres by revenue. It joins...".
+     *
+     * @param  array<string, mixed>  $queryResult
+     */
+    protected function describeMeasure(array $queryResult, string $metric, ?string $measure): string
+    {
+        $given = $queryResult['metric_description'] ?? null;
+        $given = is_string($given) && trim($given) !== '' ? $given : null;
+
+        if ($measure === null) {
+            return $given ?? $this->humanize($metric);
+        }
+
+        $named = in_array(strtolower($measure), [strtolower($metric), strtolower("total_{$metric}")], true);
+
+        if ($named && $given !== null) {
+            return $given;
+        }
+
+        if (preg_match('/^\s*(count|sum|avg|min|max)\s*\(/i', $measure, $m)) {
+            return ['count' => 'count', 'sum' => 'total', 'avg' => 'average', 'min' => 'minimum', 'max' => 'maximum'][strtolower($m[1])];
+        }
+
+        return preg_match('/^\w+$/', $measure) ? $this->humanize($measure) : 'value';
+    }
+
+    /**
      * Generate answer text (both display and speech versions).
      */
     protected function generateAnswerText(array $queryResult, array $rows, string $type): array
     {
         $datasetName = $queryResult['dataset_name'] ?? $queryResult['dataset'];
         $metric = $queryResult['metric'] ?? 'data';
-        $metricDesc = $queryResult['metric_description'] ?? $metric;
+        $measure = $this->measureColumn((array) ($rows[0] ?? []), $metric);
+        $metricDesc = $this->describeMeasure($queryResult, $metric, $measure);
         $unit = $queryResult['metric_unit'] ?? '';
         $groupColumn = $queryResult['group_column'] ?? 'name';
         $order = strtolower($queryResult['order'] ?? 'desc');
@@ -258,9 +326,20 @@ class ResponseFormatter
 
         if ($type === 'single_result' && $count === 1) {
             $row = (array) $rows[0];
-            $name = $this->labelFor($row, $groupColumn, $metric);
-            $value = $row[$metric] ?? 'N/A';
+            $name = $this->labelFor($row, $groupColumn, $measure ?? $metric);
+            $value = $measure !== null ? $row[$measure] : 'N/A';
             $formattedValue = is_numeric($value) ? $this->formatNumber($value, $numberFormat) : $value;
+
+            // Nothing in the row but the measure: there is no label to give,
+            // and labelFor()'s placeholder read as a name. The filter the plan
+            // named is not used instead - whether the SQL applied it is the
+            // SQL's business, not the plan's.
+            if ($name === '- ') {
+                return [
+                    'display' => rtrim(ucfirst($metricDesc) . ": {$formattedValue} {$unit}"),
+                    'speech' => rtrim("The {$metricDesc} is {$formattedValue} {$unit}") . '.',
+                ];
+            }
 
             return [
                 'display' => "{$name}: {$formattedValue} {$unit} ({$metricDesc})",
@@ -314,7 +393,7 @@ class ResponseFormatter
         // Ranking
         $direction = $order === 'desc' ? 'highest' : 'lowest';
         $topRows = array_slice($rows, 0, 3);
-        $topNames = array_map(fn ($r) => $this->labelFor((array) $r, $groupColumn, $metric), $topRows);
+        $topNames = array_map(fn ($r) => $this->labelFor((array) $r, $groupColumn, $measure ?? $metric), $topRows);
         $topList = implode(', ', $topNames);
 
         // Naming the dimension tells the reader which question was answered -

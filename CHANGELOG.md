@@ -111,6 +111,17 @@ the revenue was two joins away. A ranking BY a named measure now counts as
 naming its measure, so auto mode tries SQL generation before asking. "Which is
 the best?" names nothing and is still asked.
 
+### Fixed: a generated answer's sentence names the column that ran
+
+Both of those answers had the right number under the wrong sentence: "21: N/A
+(Counts the number of albums by the artist 'Iron Maiden'.)" and "Top 3 by This
+query retrieves the top 3 genres by revenue. It joins...". The value was looked
+up under the metric name the model claimed rather than the column the SQL
+returned, and the model's `explanation` - a sentence about the query - was used
+as the measure's name. The answer now reads the measure from the executed row
+and names it from that column ("Count: 21", "Top 3 by revenue"). A schema's own
+metric description is still used whenever the row holds the column it describes.
+
 ## [1.1.0] - 2026-09-10
 
 ### Runs on Laravel 11

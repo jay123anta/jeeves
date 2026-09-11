@@ -1709,7 +1709,10 @@ class QueryOrchestrator
             'dataset' => $dataset,
             'dataset_name' => $schemaData['name'] ?? $dataset,
             'metric' => $data['metric'] ?? null,
-            'metric_description' => $data['explanation'] ?? ($data['metric'] ?? 'data'),
+            // Not the model's `explanation`: the prompt asks for it as a
+            // sentence about the query, and it was set into the answer as the
+            // measure's name. ResponseFormatter names the column that ran.
+            'metric_description' => null,
             'metric_unit' => '',
             'metric_type' => 'neutral',
             'group_value' => $data['group_value'] ?? null,
@@ -2387,7 +2390,8 @@ class QueryOrchestrator
                 'dataset' => $dataset,
                 'dataset_name' => $schemaData['name'] ?? $dataset,
                 'metric' => $data['metric'] ?? null,
-                'metric_description' => $data['explanation'] ?? '',
+                // Not the model's `explanation` - see processWithSqlGeneration.
+                'metric_description' => null,
                 'metric_unit' => '',
                 'metric_type' => 'neutral',
                 'group_value' => $data['group_value'] ?? null,
