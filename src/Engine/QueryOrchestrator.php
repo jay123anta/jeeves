@@ -470,13 +470,24 @@ class QueryOrchestrator
                     // the dataset chosen cannot express the breakdown but a
                     // related table can, so trying is strictly better than
                     // handing the user a menu they cannot usefully answer.
-                    $couldNotAnswer = in_array($result['status'] ?? '', ['error', 'clarification_needed'], true);
+                    //
+                    // A name that matched nothing and may belong to a related
+                    // table is an answer intent mode could NOT give, even though
+                    // it comes back as "success" - a count of zero, or the
+                    // unfiltered total with a note. See
+                    // retryWithoutUnmatchedNameFilter().
+                    $couldNotAnswer = in_array($result['status'] ?? '', ['error', 'clarification_needed'], true)
+                        || ($result['_name_unmatched'] ?? false);
 
                     if ($couldNotAnswer && ($result['_fallback_eligible'] ?? false)) {
                         Log::info('[Jeeves] Auto mode: falling back to sql_generation', [
                             'after' => $result['status'] ?? '?',
                         ]);
                         $metadata['query_mode'] = 'auto→sql_generation';
+
+                        if ($result['_name_unmatched'] ?? false) {
+                            $metadata['escalated_for'] = 'a name not found in the table it was asked of';
+                        }
                         // Intent mode may have used the cached row and then
                         // failed downstream. Whatever it marked describes an
                         // answer that is being thrown away.
@@ -992,8 +1003,21 @@ class QueryOrchestrator
      */
     protected function statesItsOwnMeasure(string $query): bool
     {
-        return (bool) preg_match(
+        if (preg_match(
             '/\b(?:how\s+many|how\s+much|number\s+of|count\s+of|total|sum|average|mean|median|minimum|maximum|min|max|highest|lowest|largest|smallest)\b/i',
+            $query
+        )) {
+            return true;
+        }
+
+        // "Top 3 genres by revenue", "best artists by sales": a ranking BY a
+        // named measure says what to measure. Found on a real database, where
+        // the chosen dataset held no money and the question came back as "What
+        // metric would you like?" - with the measure two joins away, in a table
+        // SQL generation could reach. "Which is the best?" names nothing and
+        // is still asked.
+        return (bool) preg_match(
+            '/\b(?:top|bottom|best|worst|most|least|rank(?:ed|ing)?)\b[^.?!]*\bby\s+[a-z]/i',
             $query
         );
     }
@@ -1251,23 +1275,38 @@ class QueryOrchestrator
     {
         $filter = $intent['group_value'] ?? null;
 
-        if (($response['type'] ?? null) !== 'no_data' || empty($filter)) {
+        if (empty($filter) || !$this->matchedNothing($response)) {
             return $response;
         }
+
+        // A name that IS in its column matched nothing only because of the
+        // other conditions - a period, a second filter - and that empty
+        // answer is true. Checked locally; nothing leaves the server.
+        if ($this->nameIsStored($intent, (string) $filter)) {
+            return $response;
+        }
+
+        // A real name - not a schema word misread into the name slot - that
+        // is not in this table may belong to a RELATED one: "albums by Iron
+        // Maiden" filtered on the album's title. Only SQL generation can join
+        // to where it lives, so on a linked schema auto mode is told to try
+        // that (see query()). Pure intent mode, and a schema with no links,
+        // keep the answer below, exactly as before.
+        $mayBelongElsewhere = $this->registry->hasLinkedSchemas() && !$this->isSchemaWord((string) $filter);
 
         $unfiltered = $intent;
         $unfiltered['group_value'] = null;
 
         $rebuilt = $this->sqlBuilder->buildQuery($unfiltered);
         if (!($rebuilt['success'] ?? false)) {
-            return $response;
+            return $mayBelongElsewhere ? $this->markNameUnmatched($response) : $response;
         }
 
         $fallback = $this->validateAndExecute($rebuilt, $unfiltered['dataset'] ?? null, $metadata);
 
         // Only prefer the fallback if it actually found something.
         if (($fallback['status'] ?? '') !== 'success' || ($fallback['type'] ?? null) === 'no_data') {
-            return $response;
+            return $mayBelongElsewhere ? $this->markNameUnmatched($response) : $response;
         }
 
         Log::info('[Jeeves] Name filter matched nothing; answered without it', [
@@ -1282,7 +1321,124 @@ class QueryOrchestrator
             'filter_dropped' => true,
         ]);
 
-        return $fallback;
+        return $mayBelongElsewhere ? $this->markNameUnmatched($fallback) : $fallback;
+    }
+
+    /**
+     * Whether an answer matched nothing: no rows, or the one row of NULL or 0
+     * an ungrouped COUNT or SUM returns when its filter excluded everything.
+     * The first version read only the `no_data` type, so "how many albums
+     * does Iron Maidan have" answered a confident 0.
+     */
+    protected function matchedNothing(array $response): bool
+    {
+        if (($response['type'] ?? null) === 'no_data') {
+            return true;
+        }
+
+        return ($response['status'] ?? '') === 'success'
+            && $this->answerCarriesNoData($response['rows'] ?? []);
+    }
+
+    /**
+     * Whether the name is present in the column it was filtered on - the same
+     * column SqlBuilder used, matched the same way (exact, or contained). A
+     * local existence check on the read-only connection; no value leaves the
+     * server. Anything that stops it answering reads as "not stored", which
+     * costs at most one extra call and never a wrong number.
+     *
+     * @param  array<string, mixed>  $intent
+     */
+    protected function nameIsStored(array $intent, string $name): bool
+    {
+        $dataset = $intent['dataset'] ?? null;
+
+        if (!is_string($dataset) || !$this->registry->has($dataset)) {
+            return false;
+        }
+
+        // Through a required join the name lives in the joined table, and a
+        // probe of the base table would ask the wrong one.
+        if (!empty($this->registry->get($dataset)['tables']['primary']['required_join'])) {
+            return false;
+        }
+
+        $requested = $intent['group_by'] ?? null;
+        $column = $requested
+            ? $this->registry->resolveGroupColumn($dataset, (string) $requested)
+            : $this->registry->getGroupColumn($dataset);
+        $table = $this->registry->getTableName($dataset);
+
+        if (!$column || !$table) {
+            return false;
+        }
+
+        try {
+            $db = DB::connection(ExecutionConnection::resolve($this->registry->getConnection($dataset)));
+            $wrapped = $db->getQueryGrammar()->wrap($column);
+            $like = '%' . str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $name) . '%';
+
+            return $db->table($table)
+                ->whereRaw("LOWER({$wrapped}) = LOWER(?)", [$name])
+                ->orWhereRaw("LOWER({$wrapped}) LIKE LOWER(?) ESCAPE '!'", [$like])
+                ->exists();
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Whether a value is a word from the schema itself - a dataset or column
+     * name or alias. "Top 5 customers by revenue" sometimes arrives with
+     * "customers" in the name slot: a misread breakdown, not a name, and
+     * dropping it is the whole answer. Only a real name can belong to a
+     * different table.
+     */
+    protected function isSchemaWord(string $value): bool
+    {
+        $word = strtolower(trim($value));
+
+        if ($word === '') {
+            return false;
+        }
+
+        $forms = array_unique([$word, rtrim($word, 's'), $word . 's']);
+
+        foreach ($this->registry->all() as $key => $schema) {
+            $terms = array_merge([(string) $key, (string) ($schema['name'] ?? '')], (array) ($schema['aliases'] ?? []));
+
+            foreach ($schema['tables']['primary']['columns'] ?? [] as $column => $definition) {
+                $terms[] = (string) $column;
+
+                foreach ((array) ($definition['aliases'] ?? []) as $alias) {
+                    $terms[] = $alias;
+                }
+            }
+
+            foreach ($terms as $term) {
+                if (is_string($term) && in_array(strtolower(trim(str_replace('_', ' ', $term))), $forms, true)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Mark an answer as one intent mode could not really give, so auto mode
+     * offers the question to SQL generation. The flags are internal and are
+     * stripped before the response leaves.
+     *
+     * @param  array<string, mixed>  $response
+     * @return array<string, mixed>
+     */
+    protected function markNameUnmatched(array $response): array
+    {
+        $response['_fallback_eligible'] = true;
+        $response['_name_unmatched'] = true;
+
+        return $response;
     }
 
     // =========================================================================
@@ -3429,7 +3585,7 @@ class QueryOrchestrator
     protected function finishQuestion(string $question, array $result, bool $cacheHit, float $startTime): array
     {
         // Remove internal flags
-        unset($result['_fallback_eligible'], $result['_rate_limited'], $result['_unretriable']);
+        unset($result['_fallback_eligible'], $result['_rate_limited'], $result['_unretriable'], $result['_name_unmatched']);
 
         $result['metadata'] = array_merge($result['metadata'] ?? [], [
             'processing_time_ms' => round((microtime(true) - $startTime) * 1000, 2),

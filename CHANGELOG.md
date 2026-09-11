@@ -96,6 +96,21 @@ only `error` and a clarification carries its text in `message`. It is now
 reported as `asked for clarification: <the question it asked>`. It still counts
 as not correct.
 
+### Fixed: a question that spans two tables is answered, not guessed
+
+Found asking live questions of the public Chinook music-store database.
+"How many albums does Iron Maidan have?" was placed on the album table,
+searched for the artist in the album-title column, and answered a confident 0.
+On a schema whose tables are linked, a name that is not stored in the column it
+was filtered on now goes to SQL generation, which can join to the table it
+belongs to. A name that is stored there, or a word from the schema misread
+into the name slot, is handled as before and costs no extra call.
+
+"Top 3 genres by revenue" came back as "What metric would you like?", though
+the revenue was two joins away. A ranking BY a named measure now counts as
+naming its measure, so auto mode tries SQL generation before asking. "Which is
+the best?" names nothing and is still asked.
+
 ## [1.1.0] - 2026-09-10
 
 ### Runs on Laravel 11
