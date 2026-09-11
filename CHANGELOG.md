@@ -131,6 +131,18 @@ changed. The retry after an intent failure did the same. Both now report
 `sql_generation`, the value the audit log and the `QuestionAnswered` event read.
 An answer SqlBuilder wrote is still reported as `intent`.
 
+### Fixed: "which X has the most Y" keeps its number
+
+The one-row retry asks the model to keep the label and the measure, and it
+sometimes kept only the label: `SELECT T1.Name ... ORDER BY COUNT(T2.AlbumId)
+DESC LIMIT 1` answered "Iron Maiden: N/A records (Number of artist)". The
+aggregate a retried statement orders by but does not select is now added back to
+its SELECT - locally, with no second provider call, and validated like any other
+statement - and the response says so in `metadata.measure_restored`. A statement
+that cannot be read with certainty (a comment, a UNION, no GROUP BY) runs as
+written. And a row with no measure in it is answered with its label alone,
+instead of a sentence about a count that never ran.
+
 ## [1.1.0] - 2026-09-10
 
 ### Runs on Laravel 11

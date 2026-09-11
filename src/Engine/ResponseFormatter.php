@@ -327,7 +327,14 @@ class ResponseFormatter
         if ($type === 'single_result' && $count === 1) {
             $row = (array) $rows[0];
             $name = $this->labelFor($row, $groupColumn, $measure ?? $metric);
-            $value = $measure !== null ? $row[$measure] : 'N/A';
+
+            // No measure in the row: the answer IS the label. "Iron Maiden:
+            // N/A records (Number of artist)" described a count that never ran.
+            if ($measure === null) {
+                return ['display' => $name, 'speech' => "{$name}."];
+            }
+
+            $value = $row[$measure];
             $formattedValue = is_numeric($value) ? $this->formatNumber($value, $numberFormat) : $value;
 
             // Nothing in the row but the measure: there is no label to give,
@@ -412,6 +419,15 @@ class ResponseFormatter
         $noun = is_string($dimension) && $dimension !== ''
             ? ' ' . $this->humanizeDimension($dimension)
             : '';
+
+        // Rows with no measure were not ranked BY anything the reader can see,
+        // so the sentence does not name one.
+        if ($measure === null) {
+            return [
+                'display' => "Top {$count}{$noun}: {$topList}" . ($count > 3 ? '...' : ''),
+                'speech' => "Here are the {$count}{$noun} in {$datasetName}. Top entries are {$topList}.",
+            ];
+        }
 
         return [
             'display' => "Top {$count}{$noun} by {$metricDesc} ({$direction}): {$topList}" . ($count > 3 ? '...' : ''),

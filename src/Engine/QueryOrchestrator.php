@@ -2561,8 +2561,14 @@ class QueryOrchestrator
             return null;
         }
 
+        // The hint above asks for the measure, and a model still drops it
+        // sometimes. It is usually still in the ORDER BY, so it goes back into
+        // the SELECT here - locally, no second call, and validated below like
+        // any other statement.
+        $restored = $this->restoreDroppedMeasure($response['data']['sql']);
+
         $second = $this->validateAndExecute(
-            array_merge($queryResult, ['sql' => $response['data']['sql']]),
+            array_merge($queryResult, ['sql' => $restored ?? $response['data']['sql']]),
             $dataset,
             array_merge($metadata, ['_shape_retried' => true])
         );
@@ -2576,12 +2582,130 @@ class QueryOrchestrator
             $second['metadata'] = array_merge($second['metadata'] ?? [], [
                 'shape_retry' => true,
                 'query_mode_used' => 'sql_generation',
-            ]);
+            ], $restored !== null ? ['measure_restored' => true] : []);
 
             return $second;
         }
 
         return null;
+    }
+
+    /**
+     * Put back a measure that a statement orders by but does not select.
+     *
+     * "Which artist has the most albums", retried for one row, came back live
+     * as `SELECT T1.Name ... GROUP BY T1.Name ORDER BY COUNT(T2.AlbumId) DESC
+     * LIMIT 1`: the right artist, and the number the question was about only
+     * in the ORDER BY. That aggregate is added to the SELECT list under a
+     * plain alias. Nothing else in the statement changes.
+     *
+     * Returns null - run the statement as written - unless every condition
+     * holds: one SELECT with a GROUP BY, no comments, every literal closed,
+     * and a first ORDER BY item that is an aggregate not already selected.
+     * A statement this cannot read is never rewritten.
+     */
+    protected function restoreDroppedMeasure(string $sql): ?string
+    {
+        $flat = $this->topLevelOnly($sql);
+
+        if ($flat === null
+            || !preg_match('/^\s*SELECT\b/i', $flat)
+            || preg_match('/\b(?:UNION|INTERSECT|EXCEPT)\b/i', $flat)
+            || !preg_match('/\bGROUP\s+BY\b/i', $flat)
+            || !preg_match('/\bFROM\b/i', $flat, $from, PREG_OFFSET_CAPTURE)
+            || !preg_match('/\bORDER\s+BY\b/i', $flat, $order, PREG_OFFSET_CAPTURE)) {
+            return null;
+        }
+
+        $start = $order[0][1] + strlen($order[0][0]);
+        $end = preg_match('/\b(?:LIMIT|OFFSET|FETCH)\b|;/i', $flat, $stop, PREG_OFFSET_CAPTURE, $start)
+            ? $stop[0][1]
+            : strlen($flat);
+
+        // The first ordering item: up to the first comma at the top level.
+        $comma = strpos(substr($flat, $start, $end - $start), ',');
+        $item = trim(substr($sql, $start, $comma === false ? $end - $start : $comma));
+        $item = (string) preg_replace('/\s+(?:ASC|DESC)(?:\s+NULLS\s+(?:FIRST|LAST))?$/i', '', $item);
+
+        if (!preg_match('/^(COUNT|SUM|AVG|MIN|MAX)\s*\(/i', $item, $aggregate)) {
+            return null;
+        }
+
+        $normal = fn (string $s) => strtolower((string) preg_replace('/\s+/', '', $s));
+        $selectList = substr($sql, 0, $from[0][1]);
+
+        if (str_contains($normal($selectList), $normal($item))) {
+            return null;
+        }
+
+        $alias = ['count' => 'count', 'sum' => 'total', 'avg' => 'average', 'min' => 'minimum', 'max' => 'maximum'][strtolower($aggregate[1])];
+
+        if (preg_match('/\bAS\s+["`]?' . $alias . '\b/i', $selectList)) {
+            $alias = 'measure';
+        }
+
+        return rtrim($selectList) . ", {$item} AS {$alias} " . substr($sql, $from[0][1]);
+    }
+
+    /**
+     * The statement with literals, quoted identifiers and everything inside
+     * parentheses blanked to spaces, so keywords found in it are the outer
+     * statement's own and their offsets are offsets into the original.
+     * Null for a statement with a comment or an unclosed quote.
+     */
+    private function topLevelOnly(string $sql): ?string
+    {
+        $out = '';
+        $depth = 0;
+        $length = strlen($sql);
+
+        for ($i = 0; $i < $length; $i++) {
+            $char = $sql[$i];
+            $next = $sql[$i + 1] ?? '';
+
+            if (($char === '-' && $next === '-') || ($char === '/' && $next === '*')) {
+                return null;
+            }
+
+            if ($char === "'" || $char === '"' || $char === '`') {
+                $j = $i + 1;
+
+                while ($j < $length) {
+                    if ($sql[$j] === $char) {
+                        if (($sql[$j + 1] ?? '') === $char) {
+                            $j += 2;
+
+                            continue;
+                        }
+
+                        break;
+                    }
+
+                    $j++;
+                }
+
+                if ($j >= $length) {
+                    return null;
+                }
+
+                $out .= str_repeat(' ', $j - $i + 1);
+                $i = $j;
+
+                continue;
+            }
+
+            if ($char === '(') {
+                $depth++;
+            }
+
+            $out .= ($depth > 0 || $char === ')') ? ' ' : $char;
+
+            if ($char === ')') {
+                $depth = max(0, $depth - 1);
+            }
+        }
+
+        return $out;
     }
 
     /**

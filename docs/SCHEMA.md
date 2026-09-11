@@ -197,6 +197,18 @@ and `metadata.escalated_for` reports which of these triggered it. Set
 `sql.escalate_beyond_intent` to `false` to disable. An explicit `query_mode`
 of `intent` is always honoured as written.
 
+Two more cases are recognised only after intent mode has answered, and so cost
+one more call. Both need linked tables (`relationships`):
+
+- A name filter that matched nothing and is not stored in the column it was
+  filtered on - "how many albums does Iron Maiden have", with the artist looked
+  up in the album-title column. The name may live in a related table, and only
+  SQL generation can join to it. `metadata.escalated_for` says
+  `a name not found in the table it was asked of`. A name that is stored there,
+  or a word from the schema misread into the name slot, is answered as before.
+- A ranking by a named measure the chosen table does not hold - "top 3 genres
+  by revenue" - which would otherwise come back as "What metric would you like?".
+
 ### Breakdowns
 
 Any column marked `groupable` can be the dimension of a question: "revenue by
