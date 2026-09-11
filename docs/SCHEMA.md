@@ -32,7 +32,7 @@ per group value - e.g. one row per order), mark measure columns
 `'aggregatable' => true`: rankings and group detail views then build
 `SUM(column) ... GROUP BY group_column` so each group appears once with its
 total. For pre-aggregated tables (one row per group value - e.g. one row per
-district with pre-computed totals), omit `aggregatable` (use `sortable`
+region with pre-computed totals), omit `aggregatable` (use `sortable`
 alone) and rows are read as-is with no GROUP BY. Computed metrics whose
 expression already aggregates (`SUM`/`COUNT`/`AVG`/`MIN`/`MAX`) are grouped
 as-is and never double-wrapped.
@@ -213,9 +213,9 @@ When your data table uses IDs instead of names:
 'tables' => [
     'primary' => [
         'name' => 'data_table',
-        'group_column' => 'district_name',
-        'required_join' => 'JOIN districts d ON d.id = data_table.district_id',
-        'select_override' => 'd.district_name',
+        'group_column' => 'region_name',
+        'required_join' => 'JOIN regions r ON r.id = data_table.region_id',
+        'select_override' => 'r.region_name',
         'columns' => [...],
     ],
 ],
@@ -305,7 +305,7 @@ More examples = fewer AI errors. Cover every query pattern:
     // Computed metric
     ['natural' => 'Best completion rate', 'sql' => 'SELECT ..., ROUND(...) AS rate ... ORDER BY rate DESC'],
     // If JOIN needed - show it in EVERY example
-    ['natural' => 'Districts by count', 'sql' => 'SELECT d.name, COUNT(*) FROM data JOIN districts d ON ... GROUP BY d.name'],
+    ['natural' => 'Regions by count', 'sql' => 'SELECT r.name, COUNT(*) FROM data JOIN regions r ON ... GROUP BY r.name'],
 ],
 ```
 

@@ -59,6 +59,20 @@ It buys stability for the questions that must never vary. It says nothing about
 accuracy on the questions nobody pinned, and a test suite made of pinned
 questions will pass forever for that reason.
 
+### Examples and code no longer carry one project's geography
+
+This package began inside one state government's dashboard, and some of that
+project had stayed in what every adopter installs: a state-specific example in
+the `system_instructions` comment, place names in examples and code comments,
+a lookup-table example built on one kind of administrative area, and a legacy
+intent field. Examples now use neutral names, and nothing in the package
+assumes a country, a state, its regions or its schemes.
+
+**For custom LLM providers:** return a single-record filter as `group_value`.
+The old `district` key, which `LlmProviderInterface` still listed until this
+release, is no longer read, and a provider that still returns it will have
+that filter ignored. Every bundled provider already returned `group_value`.
+
 ## [1.1.0] - 2026-09-10
 
 ### Runs on Laravel 11
@@ -116,7 +130,7 @@ First release.
 
 `<x-jeeves::widget />` puts a conversation thread in any Blade view: users ask
 in plain English, and the answer comes back as a number, a table or a chart.
-Follow-ups work — ask *"revenue by city"*, then *"just Guwahati"*, then
+Follow-ups work — ask *"revenue by city"*, then *"just Springfield"*, then
 *"break that down by client"*, and rewind. That state is resolved in PHP rather
 than asked of the model, so it holds even on small local models.
 

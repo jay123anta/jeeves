@@ -52,7 +52,7 @@ interface LlmProviderInterface
      *               metric?: string,
      *               limit?: int,
      *               order?: 'asc'|'desc',
-     *               district?: string,
+     *               group_value?: string,
      *               confidence?: float (0.0-1.0),
      *               needs_clarification?: bool,
      *               clarification_type?: 'dataset'|'metric'|'ambiguous',

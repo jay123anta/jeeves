@@ -219,11 +219,12 @@ return [
     // This is the MOST IMPORTANT config for reducing errors in your project.
     // The more context you give, the fewer mistakes the AI makes.
     //
-    // Example for a government dashboard:
-    //   "This is a government dashboard for Assam state, India.
-    //    Districts are administrative regions. There are 35 districts.
-    //    'Kamrup Metropolitan' may appear as 'KAMRUP MOHANNAGAR' in database.
-    //    Always exclude C&D waste (type='cnd') unless explicitly asked."
+    // Example for a public-services dashboard:
+    //   "This is a dashboard of public service requests.
+    //    Regions are administrative areas; every request belongs to one.
+    //    A region renamed last year still appears under its old name in
+    //    older rows. Always exclude test entries (source='test') unless
+    //    explicitly asked."
     //
     // Example for an e-commerce app:
     //   "This is an e-commerce platform. Orders have line items.
@@ -281,8 +282,8 @@ return [
     // ==========================================================================
     // TYPO-TOLERANT DATASET MATCHING (optional, off by default)
     // ==========================================================================
-    // Routing above matches your aliases exactly, so "basundhra applications"
-    // misses an alias spelled "basundhara" by one letter and the question goes
+    // Routing above matches your aliases exactly, so "show invoces for march"
+    // misses an alias spelled "invoices" by one letter and the question goes
     // to the LLM just to be placed.
     //
     // When enabled, a question whose words are within a small edit distance of

@@ -548,7 +548,7 @@ class QueryOrchestrator
     /**
      * Process query using intent parsing → local SQL builder.
      *
-     * Flow: AI extracts (dataset, metric, order, limit, district) → SqlBuilder constructs SQL
+     * Flow: AI extracts (dataset, metric, order, limit, group_value) → SqlBuilder constructs SQL
      */
     protected function processWithIntent(string $query, ?string $datasetHint, ?array $cached, array &$metadata, array $context = []): array
     {
@@ -715,7 +715,7 @@ class QueryOrchestrator
         }
 
         if ($hasDataset && $hasGroupValue && empty($intent['metric'])) {
-            // District detail -  SqlBuilder handles this
+            // One record's detail -  SqlBuilder handles this
         } elseif (($intent['needs_clarification'] ?? false) || !$hasDataset) {
             // Why the model asked, before it is rewritten below. The prompt
             // tells it to answer 'ambiguous' when the requested breakdown is
@@ -968,7 +968,7 @@ class QueryOrchestrator
         }
 
         // The narrowing rule is spelled out because leaving it implicit lost
-        // it. "Only in Guwahati" after "total amount by city" came back from
+        // it. "Only in Springfield" after "total amount by city" came back from
         // one provider with no filter at all -  every city returned, the
         // instruction silently discarded -  and from two others as a request for
         // one record's detail rows. Naming the slot removes the guess.
@@ -998,23 +998,6 @@ class QueryOrchestrator
         );
     }
 
-    /**
-     * Bring an intent onto the current contract.
-     *
-     * The field naming a single record to filter to used to be called
-     * `district` -  vocabulary from the project this package came out of, which
-     * meant nothing on anyone else's database and which models mis-filled on
-     * other domains. It is `group_value` now, matching the builder's own
-     * group_column terminology.
-     *
-     * The old key is still read, because it can still arrive from three
-     * places: a cache row written before the rename, a custom prompt override
-     * in `prompts.intent_parsing`, or a third-party provider written against
-     * the old contract.
-     *
-     * @param  array<string, mixed>  $intent
-     * @return array<string, mixed>
-     */
     /**
      * "How many invoices are pending" is one number, not a league table.
      *
@@ -1079,12 +1062,12 @@ class QueryOrchestrator
     }
 
     /**
-     * "Only in Guwahati" narrows the answer; it does not ask for a file card.
+     * "Only in Springfield" narrows the answer; it does not ask for a file card.
      *
      * A bare `group_value` means "one named record" and routes to the detail
      * view -  every column of the matching rows. That is a reasonable reading of
-     * "revenue for Guwahati" asked cold. It is the wrong reading of "only in
-     * Guwahati" said straight after "total amount by city", where the user is
+     * "revenue for Springfield" asked cold. It is the wrong reading of "only in
+     * Springfield" said straight after "total amount by city", where the user is
      * plainly narrowing the answer they are looking at.
      *
      * Three providers demonstrated three different wrong answers to exactly
@@ -1097,7 +1080,7 @@ class QueryOrchestrator
      * grouping survives, so the answer is the one row asked for rather than a
      * table with the question changed underneath it.
      *
-     * Only inside a conversation. A one-shot "revenue for Guwahati" has no
+     * Only inside a conversation. A one-shot "revenue for Springfield" has no
      * established breakdown to narrow and keeps the detail reading.
      *
      * @param  array<string, mixed>  $intent
@@ -1138,12 +1121,6 @@ class QueryOrchestrator
 
     protected function normalizeIntent(array $intent): array
     {
-        if (!array_key_exists('group_value', $intent) && array_key_exists('district', $intent)) {
-            $intent['group_value'] = $intent['district'];
-        }
-
-        unset($intent['district']);
-
         $intent['query_type'] = $this->normalizeQueryType($intent['query_type'] ?? null);
 
         return $this->dropDuplicatedGroupValue($intent);
@@ -1326,8 +1303,8 @@ class QueryOrchestrator
         //
         // This method did not take $context at all, so every follow-up that
         // escalated here lost the whole accumulated state. "Total amount by
-        // city" → "only in Guwahati" → "breakdown by client" came back with
-        // all three clients: the Guwahati filter, established two turns
+        // city" → "only in Springfield" → "breakdown by client" came back with
+        // all three clients: the Springfield filter, established two turns
         // earlier and displayed in the state summary the user was reading,
         // simply gone from the SQL. A complete answer to a question nobody
         // asked, which is the failure this package exists to prevent.
@@ -2469,10 +2446,10 @@ class QueryOrchestrator
      * Swap a value the user typed for the one the database stores, where a
      * schema declares the pair in a column's `value_aliases`.
      *
-     * A value is swapped only when it is COMPARED WITH that column - `district
-     * = 'Karimganj'`, `LOWER(u.district) LIKE '%karimganj%'`, an item of `IN
+     * A value is swapped only when it is COMPARED WITH that column - `status
+     * = 'canceled'`, `LOWER(o.status) LIKE '%canceled%'`, an item of `IN
      * (...)` - in a table the statement reads. The first version checked only
-     * that the column appeared somewhere, so selecting `district` licensed a
+     * that the column appeared somewhere, so selecting `status` licensed a
      * rewrite of a value compared to a free-text column in the same query.
      *
      * Values only. The structure of the statement is never touched, and it
@@ -2657,8 +2634,8 @@ class QueryOrchestrator
     /**
      * The reachable column a compared reference points at, or null.
      *
-     * `u.district` is resolved through the statement's own FROM/JOIN aliases,
-     * so it reaches the table `u` stands for and no other. A bare `district`
+     * `o.status` is resolved through the statement's own FROM/JOIN aliases,
+     * so it reaches the table `o` stands for and no other. A bare `status`
      * resolves only when exactly one reachable table has that column - two is
      * ambiguous, and an ambiguous reference is never rewritten.
      *

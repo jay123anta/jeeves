@@ -140,7 +140,7 @@ class QueryState
 
         // What the instruction is actually allowed to change.
         //
-        // "Only in Guwahati" narrows. It does not choose a new measure and it
+        // "Only in Springfield" narrows. It does not choose a new measure and it
         // does not choose a new breakdown, so an intent that came back with
         // different ones has re-guessed rather than answered -  and merging
         // those silently swaps the question. A weaker model on Groq did exactly

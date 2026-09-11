@@ -46,7 +46,7 @@ Groq, OpenRouter - or a model you run yourself on Ollama, vLLM, LM Studio or
 llama.cpp. One config block, no code changes.
 
 **Conversation state is real**, and resolved in PHP rather than left to the
-model: ask *"revenue by city"*, then *"just Guwahati"*, then *"break that down
+model: ask *"revenue by city"*, then *"just Springfield"*, then *"break that down
 by client"*, then rewind. Each turn knows what the last one narrowed to. People
 can ask by typing or by speaking, and the browser does the listening, so no
 audio reaches your server either.
@@ -318,8 +318,8 @@ JEEVES_FUZZY_DATASET_MATCH=true
 ```
 
 A question that misspells a dataset's name or alias by an edit or two is routed
-there locally, with no call - *"basundhra applications"* reaches the dataset
-aliased `basundhara`. Words under five letters are never fuzzed (`sales` and
+there locally, with no call - *"show invoces for march"* reaches the dataset
+aliased `invoices`. Words under five letters are never fuzzed (`sales` and
 `scale` are one edit apart), and a misspelling two datasets match equally well
 goes to the model instead of being guessed. Exact routing always wins, and this
 runs before semantic matching below because an edit distance costs nothing.

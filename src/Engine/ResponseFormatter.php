@@ -148,7 +148,7 @@ class ResponseFormatter
                 : 'Which dataset would you like to query? Please select from the options.',
             // Null-coalesced on purpose: a provider is only required to return
             // the keys it actually resolved. A self-hosted or OpenAI-compatible
-            // model that omits 'district' must still produce a clarification,
+            // model that omits 'group_value' must still produce a clarification,
             // not an undefined-key error that the orchestrator turns into a
             // generic failure. Provider portability matters more than strict
             // response shapes here.

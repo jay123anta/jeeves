@@ -132,10 +132,10 @@ return [
             // 'required_filter' => "date = (SELECT MAX(date) FROM schema_name.table_name)",
 
             // Optional: JOIN clause when your data table uses an ID instead of a name
-            // Use this when the primary table has a foreign key (e.g., district_id)
+            // Use this when the primary table has a foreign key (e.g., region_id)
             // and you need to JOIN a lookup table to get the display name.
-            // 'required_join' => 'INNER JOIN lookup_table d ON d.id = primary_table.district_id',
-            // 'select_override' => 'd.district_name',  // Column from the joined table to use as group_column
+            // 'required_join' => 'INNER JOIN lookup_table l ON l.id = primary_table.region_id',
+            // 'select_override' => 'l.region_name',  // Column from the joined table to use as group_column
         ],
 
         // Optional: related tables for JOINs
@@ -198,7 +198,7 @@ return [
 
     // Optional: SQL query patterns (templates for different query types)
     // These are included in the AI prompt to show exact SQL patterns.
-    // Use {metric}, {order}, {limit}, {district} as placeholders.
+    // Use {metric}, {order}, {limit}, {value} as placeholders.
     // More patterns = more accurate SQL generation.
     'query_patterns' => [
         // 'ranking' => [
@@ -207,7 +207,7 @@ return [
         // ],
         // 'detail' => [
         //     'description' => 'All columns for a specific record',
-        //     'sql' => "SELECT * FROM table WHERE LOWER(name) = LOWER('{district}') LIMIT 1",
+        //     'sql' => "SELECT * FROM table WHERE LOWER(name) = LOWER('{value}') LIMIT 1",
         // ],
         // 'service_comparison' => [
         //     'description' => 'Compare different categories using UNION ALL',

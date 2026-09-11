@@ -151,28 +151,6 @@ class SqlBuilderTest extends TestCase
         $this->assertEquals('Kamrup', $result['bindings'][0]);
     }
 
-    /**
-     * `district` was the pre-1.0 name for this field. A cached intent, a
-     * custom prompt override or a third-party provider can still send it, and
-     * dropping it silently would turn a filtered question into an unfiltered
-     * one -  the wrong answer, confidently.
-     */
-    #[Test]
-    public function the_legacy_district_key_is_still_honoured()
-    {
-        $result = $this->builder->buildQuery([
-            'dataset' => 'test_orders',
-            'metric' => 'amount',
-            'limit' => 1,
-            'order' => 'desc',
-            'district' => 'Kamrup',
-        ]);
-
-        $this->assertTrue($result['success']);
-        $this->assertEquals('group_detail', $result['query_type']);
-        $this->assertEquals('Kamrup', $result['bindings'][0]);
-    }
-
     #[Test]
     public function it_resolves_metric_aliases()
     {

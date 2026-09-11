@@ -11,8 +11,6 @@ use Jayanta\Jeeves\Schema\SchemaRegistry;
  * Builds SQL queries from structured intents.
  * NEVER accepts raw SQL from AI - only structured intent data.
  * All table/column names come from schema config, not user input.
- *
- * Extracted from VoiceSqlBuilderService in CMDashboard.
  */
 class SqlBuilder
 {
@@ -26,7 +24,7 @@ class SqlBuilder
     /**
      * Build SQL query from parsed intent.
      *
-     * @param  array  $intent  Parsed intent {dataset, metric, district, limit, order}
+     * @param  array  $intent  Parsed intent {dataset, metric, group_value, limit, order}
      * @return array {success, sql, dataset, dataset_name, metric, query_type, ...}
      */
     public function buildQuery(array $intent): array
@@ -102,12 +100,7 @@ class SqlBuilder
             $metricData = $this->getMetricData($datasetKey, $metric);
 
             // Validate and sanitize parameters
-            // 'district' is the pre-1.0 name for this field. Still accepted so
-            // a custom prompt override, a cached intent, or a third-party
-            // provider written against the old contract keeps working.
-            $groupValue = $this->sanitizeGroupValue(
-                $intent['group_value'] ?? $intent['district'] ?? null
-            );
+            $groupValue = $this->sanitizeGroupValue($intent['group_value'] ?? null);
             $maxLimit = $this->registry->getMaxLimit($datasetKey) ?? config('jeeves.sql.max_limit');
             $defaultLimit = $schema['defaults']['limit'] ?? config('jeeves.sql.default_limit', 100);
             $limit = intval($intent['limit'] ?? $defaultLimit);
@@ -116,7 +109,7 @@ class SqlBuilder
             $order = strtoupper($intent['order'] ?? $schema['defaults']['order'] ?? 'DESC');
             $order = in_array($order, ['ASC', 'DESC']) ? $order : 'DESC';
 
-            // Check if this schema requires a JOIN (e.g., for district name lookup)
+            // Check if this schema requires a JOIN (e.g., to look a display name up from an id)
             $joinClause = $schema['tables']['primary']['required_join'] ?? null;
             $selectOverride = $schema['tables']['primary']['select_override'] ?? null;
 
@@ -124,7 +117,7 @@ class SqlBuilder
             // joined table. select_override maps the schema's DEFAULT group
             // column through that join, so it must not be applied when the user
             // asked to group by something else -  doing so would label region
-            // totals with district names.
+            // totals with store names.
             $fromClause = $tableName . ($joinClause ? ' ' . $joinClause : '');
             $useOverride = $selectOverride && !$requestedDimension;
             $groupColumnSelect = $useOverride
@@ -134,7 +127,7 @@ class SqlBuilder
 
             // Transactional tables (many rows per group value, e.g. one row per
             // order) need GROUP BY + SUM; pre-aggregated tables (one row per
-            // group value, e.g. one row per district) must be read as-is.
+            // group value, e.g. one row per region) must be read as-is.
             // The schema decides: a plain column marked 'aggregatable' is
             // summed per group; a computed metric whose expression already
             // aggregates (SUM/COUNT/AVG/...) is grouped as-is.
@@ -438,11 +431,11 @@ class SqlBuilder
             // A filter on the column being grouped by is NOT redundant, and
             // skipping it here silently discarded the narrowing.
             //
-            // "Total amount by city" then "only in Guwahati" produces exactly
-            // that shape -  group_by=city, filters=[city:Guwahati] -  and every
+            // "Total amount by city" then "only in Springfield" produces exactly
+            // that shape -  group_by=city, filters=[city:Springfield] -  and every
             // city came back, the instruction gone without trace. All three
             // providers were emitting the filter correctly; it was thrown away
-            // here. GROUP BY city WHERE city = 'Guwahati' is well-formed and
+            // here. GROUP BY city WHERE city = 'Springfield' is well-formed and
             // returns the one row the question asked for.
             //
             // The skip presumably dated from group_value being the only way to
@@ -582,12 +575,12 @@ class SqlBuilder
     }
 
     /**
-     * Build group-value-specific query (e.g., district detail).
+     * Build group-value-specific query (e.g., one record's detail).
      *
      * Smart matching: exact match first, then partial match fallback.
      */
     /**
-     * Build group-value-specific query (e.g., district detail).
+     * Build group-value-specific query (e.g., one record's detail).
      *
      * Smart matching: exact match first, then partial match fallback.
      * Returns [sql, bindings] for parameterized execution.

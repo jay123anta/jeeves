@@ -105,7 +105,7 @@ final class SqlLiterals
      *
      * A value belongs to the column it is compared with, not to every column
      * the statement happens to name. Reading that relationship is what stops a
-     * rewrite meant for `district` from reaching a value compared to `note` in
+     * rewrite meant for `status` from reaching a value compared to `note` in
      * the same WHERE clause.
      *
      * Readable: `col = 'v'` and the other comparison operators, LIKE / ILIKE

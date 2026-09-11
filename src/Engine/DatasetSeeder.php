@@ -194,7 +194,7 @@ class DatasetSeeder
 
     /**
      * Lower-cased words, split on anything that is not a letter or digit, so
-     * "PMAY-G" in a schema and "pmay g" in a question compare as equals.
+     * "SALES-ORDERS" in a schema and "sales orders" in a question compare as equals.
      *
      * @return array<int, string>
      */
