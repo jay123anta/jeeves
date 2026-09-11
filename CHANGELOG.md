@@ -5,6 +5,17 @@ All notable changes to `jayanta/jeeves` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Misspelled dataset names are placed without a call
+
+`fuzzy_dataset_matching`, off by default. A question whose words are an edit or
+two from one dataset's name or alias is routed there locally - no service, no
+provider call. Words under five letters are never fuzzed, and a misspelling two
+datasets match equally well is left to the model rather than guessed. It runs on
+the generation path only, never inside the check that decides whether a cached
+answer belongs to the question being asked.
+
 ## [1.1.0] - 2026-09-10
 
 ### Runs on Laravel 11

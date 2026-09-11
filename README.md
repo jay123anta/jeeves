@@ -290,6 +290,19 @@ ceiling, deliberately.
 **Or spend nothing at all:** point `JEEVES_LLM_DRIVER` at Ollama and the only
 cost is your own hardware. → [docs/CACHING.md](docs/CACHING.md)
 
+### Misspelled dataset names (optional, off)
+
+```dotenv
+JEEVES_FUZZY_DATASET_MATCH=true
+```
+
+A question that misspells a dataset's name or alias by an edit or two is routed
+there locally, with no call - *"basundhra applications"* reaches the dataset
+aliased `basundhara`. Words under five letters are never fuzzed (`sales` and
+`scale` are one edit apart), and a misspelling two datasets match equally well
+goes to the model instead of being guessed. Exact routing always wins, and this
+runs before semantic matching below because an edit distance costs nothing.
+
 ### Matching by meaning, to skip the routing call (optional, off)
 
 Routing matches **words**. Ask *"how many houses were built"* of a dataset

@@ -89,4 +89,117 @@ class DatasetSeeder
 
         return null;
     }
+
+    /**
+     * The dataset a question MISSPELLS the name or an alias of.
+     *
+     * Deliberately NOT part of detect(). detect() also decides, through
+     * QueryOrchestrator::resolveAskingDataset(), whether a cached answer
+     * belongs to this question (NQ-003), and a guess must never sit inside
+     * that guard: "invoicez" is one edit from two datasets on an install that
+     * has both, and replaying one dataset's cached numbers for the other is
+     * the confidently-wrong answer the package exists to rule out. This is
+     * consulted on the generation path only, after detect() has missed.
+     *
+     * Local and deterministic: edit distance against the install's OWN dataset
+     * names and aliases. No service, no call, nothing leaves the server.
+     *
+     * Words under five letters are never fuzzed. "sales" and "scale" are one
+     * edit apart, and short words are where a near-miss stops being a typo and
+     * starts being a different word. A misspelling two datasets match equally
+     * well returns null - the LLM places it instead of this guessing.
+     */
+    public function detectFuzzy(string $query, int $maxDistance = 2): ?string
+    {
+        $words = $this->words($query);
+
+        if ($words === [] || $maxDistance < 1) {
+            return null;
+        }
+
+        $best = null;
+        $tied = false;
+
+        foreach ($this->registry->all() as $key => $schema) {
+            foreach ($this->fuzzyTerms($key, $schema) as $term) {
+                $length = mb_strlen($term);
+
+                if ($length < 5) {
+                    continue;
+                }
+
+                $allowed = min($maxDistance, $length >= 9 ? 2 : 1);
+                $span = substr_count($term, ' ') + 1;
+
+                for ($i = 0; $i + $span <= count($words); $i++) {
+                    $distance = levenshtein(implode(' ', array_slice($words, $i, $span)), $term);
+
+                    if ($distance > $allowed) {
+                        continue;
+                    }
+
+                    if ($best === null || $distance < $best['distance']) {
+                        $best = ['dataset' => $key, 'distance' => $distance, 'term' => $term];
+                        $tied = false;
+                    } elseif ($distance === $best['distance'] && $key !== $best['dataset']) {
+                        $tied = true;
+                    }
+                }
+            }
+        }
+
+        if ($best === null || $tied) {
+            return null;
+        }
+
+        Log::debug('[Jeeves] Fuzzy dataset match', [
+            'dataset' => $best['dataset'],
+            'term' => $best['term'],
+            'distance' => $best['distance'],
+        ]);
+
+        return $best['dataset'];
+    }
+
+    /**
+     * Names a user might misspell: the key, the display name, every alias.
+     * Column aliases are left out - they describe what is IN a dataset, and a
+     * near-miss on one is far weaker evidence than a near-miss on its name.
+     *
+     * @return array<int, string>
+     */
+    protected function fuzzyTerms(string $key, array $schema): array
+    {
+        $terms = array_merge(
+            [str_replace('_', ' ', $key), $schema['name'] ?? ''],
+            $schema['aliases'] ?? []
+        );
+
+        $out = [];
+
+        foreach ($terms as $term) {
+            if (!is_string($term)) {
+                continue;
+            }
+
+            $normalised = implode(' ', $this->words($term));
+
+            if ($normalised !== '') {
+                $out[$normalised] = true;
+            }
+        }
+
+        return array_keys($out);
+    }
+
+    /**
+     * Lower-cased words, split on anything that is not a letter or digit, so
+     * "PMAY-G" in a schema and "pmay g" in a question compare as equals.
+     *
+     * @return array<int, string>
+     */
+    protected function words(string $text): array
+    {
+        return preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower($text), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    }
 }

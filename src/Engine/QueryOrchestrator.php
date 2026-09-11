@@ -1405,11 +1405,27 @@ class QueryOrchestrator
         }
 
         // Step 1: Identify the dataset
-        // (priority: hint → routing → keywords → semantic → LLM intent)
+        // (priority: hint → routing → keywords → fuzzy → semantic → LLM intent)
         $dataset = $datasetHint;
         if (!$dataset || !$this->registry->has($dataset)) {
             // Try keyword/routing detection first (fast, no API call)
             $dataset = $this->seeder?->detect($query);
+        }
+
+        // Typo-tolerant routing, when an install has opted into it. Ahead of
+        // semantic matching because it is local and deterministic - a
+        // misspelled alias should not cost a round trip to learn what an edit
+        // distance already knows - and behind exact detection so it can never
+        // re-decide a question the aliases already place.
+        if ((!$dataset || !$this->registry->has($dataset))
+            && config('jeeves.fuzzy_dataset_matching.enabled', false)
+            && ($fuzzy = $this->seeder?->detectFuzzy(
+                $query,
+                (int) config('jeeves.fuzzy_dataset_matching.max_distance', 2)
+            ))
+        ) {
+            $dataset = $fuzzy;
+            $metadata['_dataset_via'] = 'fuzzy';
         }
 
         // Semantic matching, when an install has opted into it. It sits HERE

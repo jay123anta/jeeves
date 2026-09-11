@@ -250,6 +250,30 @@ return [
     ],
 
     // ==========================================================================
+    // TYPO-TOLERANT DATASET MATCHING (optional, off by default)
+    // ==========================================================================
+    // Routing above matches your aliases exactly, so "basundhra applications"
+    // misses an alias spelled "basundhara" by one letter and the question goes
+    // to the LLM just to be placed.
+    //
+    // When enabled, a question whose words are within a small edit distance of
+    // ONE dataset's name or alias is routed there - locally, with no call.
+    // Words under five letters are never fuzzed ("sales" and "scale" are one
+    // edit apart), and a misspelling two datasets match equally well is left
+    // to the LLM rather than guessed.
+    //
+    // Exact routing always wins, and this runs on the generation path only -
+    // never inside the check that decides whether a cached answer belongs to
+    // the question being asked.
+    'fuzzy_dataset_matching' => [
+        'enabled' => (bool) env('JEEVES_FUZZY_DATASET_MATCH', false),
+
+        // Most edits tolerated. Names of 5-8 letters get at most 1 whatever
+        // this says; 9 or more get up to this. 0 turns fuzzing off.
+        'max_distance' => (int) env('JEEVES_FUZZY_DATASET_MAX_DISTANCE', 2),
+    ],
+
+    // ==========================================================================
     // SEMANTIC DATASET MATCHING (optional, off by default)
     // ==========================================================================
     // A middle step between the keyword routing above and the LLM.
