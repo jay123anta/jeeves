@@ -235,6 +235,28 @@ class QueryOrchestrator
                 }
             }
 
+            // A pinned query: an exact question an install has tied to reviewed
+            // SQL. Before planning, so a pinned question is never decomposed,
+            // and before the cache, because it is already free. Its SQL goes
+            // through validateAndExecute() like every other statement - the
+            // whitelist, SELECT-only, the LIMIT rule and required_filter all
+            // apply. Pinned means "this is our SQL", not "this is safe".
+            if ($pinned = $this->pinnedQueryFor($naturalLanguageQuery)) {
+                $metadata['pinned_query'] = true;
+                $metadata['query_mode_used'] = 'pinned';
+
+                $result = $this->validateAndExecute([
+                    'sql' => $pinned['sql'],
+                    'bindings' => [],
+                    'dataset' => $pinned['dataset'],
+                    'metric' => $pinned['metric'],
+                    'query_type' => $pinned['query_type'],
+                    'question' => $naturalLanguageQuery,
+                ], $pinned['dataset'], $metadata);
+
+                return $this->finishQuestion($naturalLanguageQuery, $result, false, $startTime);
+            }
+
             // A question about two things needs two queries. Gated by a local
             // pattern check, so an ordinary question costs exactly what it
             // costs today and takes exactly the path it takes today.
@@ -497,35 +519,7 @@ class QueryOrchestrator
             // rather than what was available. This is the value the audit log,
             // the QuestionAnswered event and verification.skip_on_cache_hit
             // all consume.
-            $cacheHit = $metadata['cache_hit'] ?? false;
-
-            // Remove internal flags
-            unset($result['_fallback_eligible'], $result['_rate_limited'], $result['_unretriable']);
-
-            // Add timing
-            $result['metadata'] = array_merge($result['metadata'] ?? [], [
-                'processing_time_ms' => round((microtime(true) - $startTime) * 1000, 2),
-                'cache_hit' => $cacheHit,
-                'provider' => $this->llmProvider->getName(),
-            ]);
-
-            // What this answer cost. Absent for a cache hit, which is the
-            // point of the cache, and absent for providers that report no
-            // usage -  an omitted figure is honest, a zero is not.
-            if ($usage = $this->usageForThisQuestion()) {
-                $result['metadata']['usage'] = $usage;
-            }
-
-            // Audit logging
-            if (config('jeeves.privacy.audit_queries', true) && ($result['status'] ?? '') === 'success') {
-                $this->auditLog($result, $cacheHit, $startTime);
-            }
-
-            if (!$this->inStepExecution) {
-                $this->announceOutcome($naturalLanguageQuery, $result, $cacheHit, $startTime);
-            }
-
-            return $result;
+            return $this->finishQuestion($naturalLanguageQuery, $result, (bool) ($metadata['cache_hit'] ?? false), $startTime);
 
             // \Throwable, not \Exception. A TypeError extends \Error and so slipped
             // straight past this, taking the whole error envelope with it: the
@@ -3320,6 +3314,125 @@ class QueryOrchestrator
     /**
      * Audit log for successful queries.
      */
+    /**
+     * Everything an answer gets on the way out, whichever route produced it:
+     * internal flags removed, timing and provider added, usage when known, the
+     * audit log, and the QuestionAnswered / QuestionFailed announcement.
+     *
+     * One method because a second way out of query() - pinned queries are the
+     * first - that copied these lines would be one more place to keep in step.
+     * The early exits above show how that goes: each one had to be taught to
+     * announce itself separately, and one of them was not.
+     */
+    protected function finishQuestion(string $question, array $result, bool $cacheHit, float $startTime): array
+    {
+        // Remove internal flags
+        unset($result['_fallback_eligible'], $result['_rate_limited'], $result['_unretriable']);
+
+        $result['metadata'] = array_merge($result['metadata'] ?? [], [
+            'processing_time_ms' => round((microtime(true) - $startTime) * 1000, 2),
+            'cache_hit' => $cacheHit,
+            'provider' => $this->llmProvider->getName(),
+        ]);
+
+        // What this answer cost. Absent for a cache hit, which is the point of
+        // the cache, and absent for providers that report no usage - an
+        // omitted figure is honest, a zero is not.
+        if ($usage = $this->usageForThisQuestion()) {
+            $result['metadata']['usage'] = $usage;
+        }
+
+        if (config('jeeves.privacy.audit_queries', true) && ($result['status'] ?? '') === 'success') {
+            $this->auditLog($result, $cacheHit, $startTime);
+        }
+
+        if (!$this->inStepExecution) {
+            $this->announceOutcome($question, $result, $cacheHit, $startTime);
+        }
+
+        return $result;
+    }
+
+    /**
+     * The pinned query an install declared for this exact question, or null.
+     *
+     * "Exact" ignores case, punctuation and spacing - "Revenue by status?" and
+     * "revenue  by status" are one question - and nothing else. No fuzziness:
+     * a pinned query exists to be predictable, and a near-miss that silently
+     * ran reviewed SQL for a different question would be the opposite.
+     *
+     * @return array{sql: string, dataset: ?string, metric: ?string, query_type: ?string}|null
+     */
+    protected function pinnedQueryFor(string $question): ?array
+    {
+        $pinned = config('jeeves.pinned_queries', []);
+
+        if (!is_array($pinned) || $pinned === []) {
+            return null;
+        }
+
+        $asked = $this->normalisePinnedQuestion($question);
+
+        if ($asked === '') {
+            return null;
+        }
+
+        foreach ($pinned as $entry) {
+            if (!is_array($entry) || !is_string($entry['sql'] ?? null) || trim($entry['sql']) === '') {
+                continue;
+            }
+
+            foreach ((array) ($entry['question'] ?? []) as $phrasing) {
+                if (!is_string($phrasing) || $this->normalisePinnedQuestion($phrasing) !== $asked) {
+                    continue;
+                }
+
+                $dataset = $entry['dataset'] ?? null;
+
+                if (!is_string($dataset) || !$this->registry->has($dataset)) {
+                    $dataset = $this->datasetNamedBySql($entry['sql']);
+                }
+
+                return [
+                    'sql' => $entry['sql'],
+                    'dataset' => $dataset,
+                    'metric' => isset($entry['metric']) ? (string) $entry['metric'] : null,
+                    'query_type' => isset($entry['query_type']) ? (string) $entry['query_type'] : null,
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    /** Lower-cased words joined by single spaces: case, punctuation and spacing ignored. */
+    protected function normalisePinnedQuestion(string $text): string
+    {
+        return implode(' ', preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower($text), -1, PREG_SPLIT_NO_EMPTY) ?: []);
+    }
+
+    /**
+     * The one registered dataset whose table a statement names, or null when
+     * it names none or several. Used only when a pinned entry does not say -
+     * it decides which connection the SQL runs on, so a guess between two is
+     * not made.
+     */
+    protected function datasetNamedBySql(string $sql): ?string
+    {
+        $found = [];
+
+        foreach ($this->registry->all() as $key => $schema) {
+            $table = (string) ($schema['tables']['primary']['name'] ?? '');
+            $short = str_contains($table, '.') ? substr($table, strrpos($table, '.') + 1) : $table;
+
+            if ($short !== '' && SqlLiterals::mentions($sql, $short)) {
+                $found[] = (string) $key;
+            }
+        }
+
+        return count($found) === 1 ? $found[0] : null;
+    }
+
     /**
      * Tell the application how the question ended.
      *

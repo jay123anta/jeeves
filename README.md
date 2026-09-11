@@ -176,6 +176,27 @@ Nothing below needs a code change, a subclass, or a fork.
 and that curation is what moves accuracy, by the numbers further down this
 page. Full reference: [docs/SCHEMA.md](docs/SCHEMA.md).
 
+### When people type it differently
+
+Your data spells a value one way and people type it another. Two keys in the
+schema file handle that, on any column - statuses, product names, countries,
+regions, whatever yours holds:
+
+| | Key | What happens |
+|---|---|---|
+| **Other names** | `'value_aliases' => ['cancelled' => ['canceled', 'void']]` | A rename, spelling variant or synonym is swapped for the stored value before the query runs |
+| **Typos** | `'correct_typos' => true` | When a filter finds nothing, the closest stored value - a different case, or an edit or two away - is tried once more |
+
+Both are reported in the response metadata and scoped to the column and table
+that declare them, and neither sends a stored value to the model. A misspelled
+*dataset* name is covered separately, by `JEEVES_FUZZY_DATASET_MATCH` below.
+→ [docs/SCHEMA.md](docs/SCHEMA.md)
+
+**Questions that must never vary.** The number a report is signed off against
+can be tied to reviewed SQL in `pinned_queries`. It runs with no model call and
+gives the same answer every time, and it is still validated like any other
+statement. It buys stability for those questions, not accuracy on the rest.
+
 ## Ask a question
 
 ```php
@@ -655,6 +676,11 @@ php artisan jeeves:semantic-corpus # describe your datasets for a matching servi
 `discover` → `audit-schema` → write the descriptions it asks for → `benchmark`
 is the loop that moves accuracy. The audit says what the model is guessing; the
 benchmark tells you what fixing that was worth, on your own data.
+
+A benchmark question can also carry `expect` - a row count, a range the figure
+must fall in, a name that must appear - instead of or as well as reference SQL.
+That catches what comparing results cannot: a total over no rows is `NULL`, and
+a reference that returns the same `NULL` would otherwise call it correct.
 
 ## Contributing
 

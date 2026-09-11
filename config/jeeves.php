@@ -250,6 +250,35 @@ return [
     ],
 
     // ==========================================================================
+    // PINNED QUERIES (optional)
+    // ==========================================================================
+    // A question that must always be answered by the same reviewed SQL - the
+    // figure on the front page, the number a report is signed off against.
+    //
+    // When a question matches one of these (case, punctuation and spacing
+    // ignored, nothing fuzzier), its SQL runs directly: no model call and no
+    // variance between runs. Anything that does not match takes the normal
+    // route.
+    //
+    // The SQL is still validated like any other - SELECT only, tables from
+    // your schema files, a LIMIT unless it returns one row - and a dataset's
+    // required_filter still applies. Pinned means "this is our SQL", not
+    // "this is safe".
+    //
+    // This buys stability, not accuracy on questions nobody pinned. A test
+    // suite made of pinned questions will pass forever and say nothing about
+    // the next thing a user asks.
+    'pinned_queries' => [
+        // [
+        //     'question' => ['total pending applications', 'how many are pending'],
+        //     'sql' => 'SELECT SUM(pending) AS pending FROM applications',
+        //     // Optional. Inferred from the SQL when it names exactly one
+        //     // table; it decides which connection the SQL runs on.
+        //     'dataset' => 'applications',
+        // ],
+    ],
+
+    // ==========================================================================
     // TYPO-TOLERANT DATASET MATCHING (optional, off by default)
     // ==========================================================================
     // Routing above matches your aliases exactly, so "basundhra applications"

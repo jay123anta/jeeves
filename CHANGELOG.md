@@ -45,6 +45,18 @@ rows returns NULL, the reference returns the same NULL, and the two compare as
 correct. With both, both must hold. An unknown check is refused before anything
 runs, so a typo in a check cannot read as the package being wrong.
 
+### Pinned queries
+
+`pinned_queries` ties an exact question - case, punctuation and spacing
+ignored, nothing fuzzier - to reviewed SQL that runs with no model call and the
+same answer every time. It is still validated like any other statement: SELECT
+only, tables from your schema files, the LIMIT rule and `required_filter`. A
+pinned answer is timed, audited and announced like every other.
+
+It buys stability for the questions that must never vary. It says nothing about
+accuracy on the questions nobody pinned, and a test suite made of pinned
+questions will pass forever for that reason.
+
 ## [1.1.0] - 2026-09-10
 
 ### Runs on Laravel 11
