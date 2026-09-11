@@ -122,6 +122,15 @@ as the measure's name. The answer now reads the measure from the executed row
 and names it from that column ("Count: 21", "Top 3 by revenue"). A schema's own
 metric description is still used whenever the row holds the column it describes.
 
+### Fixed: `query_mode_used` names who wrote the SQL that ran
+
+"Which artist has the most albums?" reported `intent` over a join the model had
+written. Intent mode built a ranked list, the one-row shape retry regenerated it
+through the provider, and the label set on entering intent mode was never
+changed. The retry after an intent failure did the same. Both now report
+`sql_generation`, the value the audit log and the `QuestionAnswered` event read.
+An answer SqlBuilder wrote is still reported as `intent`.
+
 ## [1.1.0] - 2026-09-10
 
 ### Runs on Laravel 11

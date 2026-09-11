@@ -160,7 +160,9 @@ your server or any model provider.
   "metadata": {
     "request_id": "…", "processing_time_ms": 812,
     "processing_mode": "gemini", "query_mode": "auto",
-    "query_mode_used": "intent",  // intent | sql_generation
+    "query_mode_used": "intent",  // who wrote the SQL that ran: intent
+                                  // (SqlBuilder) | sql_generation (the model,
+                                  // including a retry) | pinned
     "cache_hit": false,
 
     // What the question cost, when the provider reports it. Summed across

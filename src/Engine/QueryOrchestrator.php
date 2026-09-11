@@ -2409,6 +2409,11 @@ class QueryOrchestrator
                 'group_column' => $this->registry->getGroupColumn($dataset),
             ];
 
+            // Model-written SQL runs next, so say so. The label was whatever
+            // the failed attempt had set, and after an intent failure that
+            // reported `intent` over the model's statement.
+            $metadata['query_mode_used'] = 'sql_generation';
+
             $result = $this->validateAndExecute($queryResult, $dataset, $metadata);
             $result['_retried'] = true;
 
@@ -2565,7 +2570,13 @@ class QueryOrchestrator
         // Adopted only if it is the shape we retried for. Anything else -
         // an error, a refusal, another list - leaves the first answer standing.
         if (($second['status'] ?? null) === 'success' && count($second['rows'] ?? []) === 1) {
-            $second['metadata'] = array_merge($second['metadata'] ?? [], ['shape_retry' => true]);
+            // The model wrote this SQL, whichever route asked for it. On the
+            // intent route the label still said `intent` over a join the
+            // intent contract cannot express - Rule 8, found live on Chinook.
+            $second['metadata'] = array_merge($second['metadata'] ?? [], [
+                'shape_retry' => true,
+                'query_mode_used' => 'sql_generation',
+            ]);
 
             return $second;
         }
