@@ -319,6 +319,19 @@ class ResponseFormatter
         $measure = $this->measureColumn((array) ($rows[0] ?? []), $metric);
         $metricDesc = $this->describeMeasure($queryResult, $metric, $measure);
         $unit = $queryResult['metric_unit'] ?? '';
+
+        // A unit belongs to the metric that declared it. When the column that
+        // ran is another one - a model's own `NumberOfAlbums` under a claimed
+        // `record_count` - nobody declared its unit, and "21 records" was the
+        // plan's word over the artifact's number.
+        if ($measure !== null && !in_array(strtolower($measure), [strtolower($metric), strtolower("total_{$metric}")], true)) {
+            $unit = '';
+        }
+
+        // "Number of albums: 1 records" says what is counted twice.
+        if (preg_match('/^number of\b/i', $metricDesc)) {
+            $unit = '';
+        }
         $groupColumn = $queryResult['group_column'] ?? 'name';
         $order = strtolower($queryResult['order'] ?? 'desc');
         $count = count($rows);
@@ -349,8 +362,8 @@ class ResponseFormatter
             }
 
             return [
-                'display' => "{$name}: {$formattedValue} {$unit} ({$metricDesc})",
-                'speech' => "{$name} has {$formattedValue} {$unit} for {$metricDesc} in {$datasetName}.",
+                'display' => $this->oneSpaced("{$name}: {$formattedValue} {$unit} ({$metricDesc})"),
+                'speech' => $this->oneSpaced("{$name} has {$formattedValue} {$unit} for {$metricDesc} in {$datasetName}."),
             ];
         }
 
@@ -391,9 +404,19 @@ class ResponseFormatter
 
             $formatted = $this->formatNumber($total, $numberFormat);
 
+            // "Total Number of albums" - the prefix is for a sum. A description
+            // that is already a quantity (a count, an average, a maximum) says
+            // what the number is without it.
+            if (preg_match('/^(?:number|count|total|sum|average|avg|mean|median|min|minimum|max|maximum)\b/i', $metricDesc)) {
+                return [
+                    'display' => $this->oneSpaced(ucfirst($metricDesc) . ": {$formatted} {$unit}"),
+                    'speech' => $this->oneSpaced('The ' . lcfirst($metricDesc) . " for {$datasetName} is {$formatted} {$unit}") . '.',
+                ];
+            }
+
             return [
-                'display' => "Total {$metricDesc}: {$formatted} {$unit}",
-                'speech' => "The total {$metricDesc} for {$datasetName} is {$formatted} {$unit}.",
+                'display' => $this->oneSpaced("Total {$metricDesc}: {$formatted} {$unit}"),
+                'speech' => $this->oneSpaced("The total {$metricDesc} for {$datasetName} is {$formatted} {$unit}") . '.',
             ];
         }
 
@@ -433,6 +456,12 @@ class ResponseFormatter
             'display' => "Top {$count}{$noun} by {$metricDesc} ({$direction}): {$topList}" . ($count > 3 ? '...' : ''),
             'speech' => "Here are the {$count}{$noun} with the {$direction} {$metricDesc} in {$datasetName}. Top entries are {$topList}.",
         ];
+    }
+
+    /** A sentence with an empty slot in it - no unit, say - reads with one space, not two. */
+    protected function oneSpaced(string $text): string
+    {
+        return trim(str_replace(' .', '.', (string) preg_replace('/ {2,}/', ' ', $text)));
     }
 
     /** @see HumanizesNames::humanizePlural() */

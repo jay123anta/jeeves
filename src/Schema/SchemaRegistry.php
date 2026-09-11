@@ -396,6 +396,18 @@ class SchemaRegistry
         // "Number of orders" reads better than "Number of orders records",
         // and this description is shown to the user in the answer sentence.
         $label = trim(strtolower($schema['name'] ?? ''));
+
+        // `jeeves:discover` names a dataset after its table, and tables are
+        // often singular: Chinook's `Album` answered "Number of album". Only
+        // the last word takes the plural, and a plural name is left alone.
+        if ($label !== '' && !str_ends_with($label, 's')) {
+            $label = match (true) {
+                (bool) preg_match('/[^aeiou]y$/', $label) => substr($label, 0, -1) . 'ies',
+                (bool) preg_match('/(?:x|z|ch|sh)$/', $label) => $label . 'es',
+                default => $label . 's',
+            };
+        }
+
         $description = $label !== '' ? "Number of {$label}" : 'Number of records';
 
         return $metrics + [

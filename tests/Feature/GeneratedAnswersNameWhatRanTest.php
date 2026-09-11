@@ -135,6 +135,6 @@ class GeneratedAnswersNameWhatRanTest extends TestCase
             'group_value' => 'Alice', 'query_type' => 'group_detail', 'group_column' => 'name',
         ], [(object) ['name' => 'Alice', 'amount' => 1000]]);
 
-        $this->assertSame('Alice: 1,000  (Order amount)', $result['answer']);
+        $this->assertSame('Alice: 1,000 (Order amount)', $result['answer']);
     }
 }

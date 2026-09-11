@@ -12,10 +12,20 @@ namespace Jayanta\Jeeves\Engine\Concerns;
  */
 trait HumanizesNames
 {
-    /** region → region, product_category → product category. */
+    /**
+     * region → region, product_category → product category, and
+     * NumberOfAlbums → number of albums: generated SQL aliases in CamelCase,
+     * and so do schemas discovered from databases like Chinook.
+     */
     protected function humanize(string $name): string
     {
-        return trim(str_replace('_', ' ', trim($name)));
+        $name = trim($name);
+
+        if (preg_match('/[a-z][A-Z]/', $name)) {
+            $name = strtolower((string) preg_replace('/(?<=[a-z0-9])(?=[A-Z])/', ' ', $name));
+        }
+
+        return trim(str_replace('_', ' ', $name));
     }
 
     /**

@@ -143,6 +143,17 @@ that cannot be read with certainty (a comment, a UNION, no GROUP BY) runs as
 written. And a row with no measure in it is answered with its label alone,
 instead of a sentence about a count that never ran.
 
+### Fixed: the answer sentence reads like English
+
+Read off live Chinook answers, each with the right number: "Total Number of
+album: 1 records", "Iron Maiden: 21 records (NumberOfAlbums)". The implicit
+count metric now pluralises a singular dataset name ("Number of albums"), a
+total whose description is already a quantity loses the "Total" prefix, a count
+is not followed by "records", CamelCase column names are read as words ("number
+of albums"), and a unit is shown only over the column of the metric that
+declared it - never over a model's own column that merely claimed that metric.
+An empty slot no longer leaves a double space.
+
 ## [1.1.0] - 2026-09-10
 
 ### Runs on Laravel 11
