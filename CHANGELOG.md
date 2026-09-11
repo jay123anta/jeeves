@@ -36,6 +36,15 @@ values are read and compared on your server and never reach the model, and
 correcting costs no provider call. A stored value is never changed, ties are
 not guessed, and a column over `value_correction.max_distinct` is skipped.
 
+### `jeeves:benchmark` can check an answer, not only compare it
+
+A question may carry `expect` - a row count, a range the figure must fall in, a
+name that must appear - instead of or as well as a reference query. It grades
+what a reference cannot always express, and closes the case where a SUM over no
+rows returns NULL, the reference returns the same NULL, and the two compare as
+correct. With both, both must hold. An unknown check is refused before anything
+runs, so a typo in a check cannot read as the package being wrong.
+
 ## [1.1.0] - 2026-09-10
 
 ### Runs on Laravel 11

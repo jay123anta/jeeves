@@ -108,8 +108,13 @@ class BenchmarkCommand extends Command
         }
 
         foreach ($questions as $i => $q) {
-            if (empty($q['question']) || empty($q['gold'])) {
-                $this->error('Question #' . ($i + 1) . " needs both 'question' and 'gold'.");
+            $hasGold = !empty($q['gold']);
+            $hasExpect = !empty($q['expect']);
+
+            // A question is graded against a reference query, against checks
+            // on the answer, or both. With neither there is nothing to grade.
+            if (empty($q['question']) || (!$hasGold && !$hasExpect)) {
+                $this->error('Question #' . ($i + 1) . " needs a 'question' and either a reference query in 'gold' or checks in 'expect'.");
 
                 return null;
             }
@@ -118,8 +123,16 @@ class BenchmarkCommand extends Command
             // database. It is their SQL, but a benchmark file is the kind of
             // thing that gets copied between projects, and a stray UPDATE in
             // one would be executed without a word. Reads only.
-            if (!preg_match('/^\s*(SELECT|WITH)\b/i', (string) $q['gold'])) {
+            if ($hasGold && !preg_match('/^\s*(SELECT|WITH)\b/i', (string) $q['gold'])) {
                 $this->error('Question #' . ($i + 1) . "'s reference SQL is not a SELECT. Refusing to run it.");
+
+                return null;
+            }
+
+            // Refused up front rather than failing every question at run time:
+            // a misspelt check would otherwise read as the package being wrong.
+            if ($hasExpect && ($problem = $this->invalidExpectation($q['expect'])) !== null) {
+                $this->error('Question #' . ($i + 1) . ': ' . $problem);
 
                 return null;
             }
@@ -182,42 +195,199 @@ class BenchmarkCommand extends Command
             return array_merge($row, ['reason' => $answer['error'] ?? 'no answer', 'error_code' => $answer['error_code'] ?? null]);
         }
 
-        try {
-            $dataset = $answer['parsed_query']['dataset'] ?? ($q['dataset'] ?? null);
-            // NQ-001. The gold answer is hand-written rather than generated,
-            // so this is not the finding itself -  but it is a benchmark run
-            // executing arbitrary SQL, and the reason to point it at anything
-            // other than the read-only connection is nil. Same rule, so the
-            // command cannot become the one place the guarantee is absent.
-            $connection = ExecutionConnection::resolve(
-                is_string($dataset) && $registry->has($dataset)
-                    ? $registry->getConnection($dataset)
-                    : null
-            );
+        // A reference query, when the question has one. Checks in `expect` run
+        // after it, so a question carrying both has to satisfy both.
+        if (!empty($q['gold'])) {
+            try {
+                $dataset = $answer['parsed_query']['dataset'] ?? ($q['dataset'] ?? null);
+                // NQ-001. The gold answer is hand-written rather than generated,
+                // so this is not the finding itself -  but it is a benchmark run
+                // executing arbitrary SQL, and the reason to point it at anything
+                // other than the read-only connection is nil. Same rule, so the
+                // command cannot become the one place the guarantee is absent.
+                $connection = ExecutionConnection::resolve(
+                    is_string($dataset) && $registry->has($dataset)
+                        ? $registry->getConnection($dataset)
+                        : null
+                );
 
-            $expected = DB::connection($connection)->select((string) $q['gold']);
-        } catch (\Throwable $e) {
-            $tick('<fg=yellow>reference SQL failed</>');
+                $expected = DB::connection($connection)->select((string) $q['gold']);
+            } catch (\Throwable $e) {
+                $tick('<fg=yellow>reference SQL failed</>');
 
-            return array_merge($row, ['reason' => 'the reference SQL did not run: ' . $e->getMessage()]);
+                return array_merge($row, ['reason' => 'the reference SQL did not run: ' . $e->getMessage()]);
+            }
+
+            if (!$comparator->matches($expected, $answer['rows'] ?? [], $ordered)) {
+                $tick('<fg=red>wrong</>');
+
+                return array_merge($row, [
+                    'reason' => 'different result',
+                    'expected' => $comparator->preview($comparator->normalize($expected, $ordered)),
+                    'got' => $comparator->preview($comparator->normalize($answer['rows'] ?? [], $ordered)),
+                    // The most useful thing on a wrong answer: what it thought it was
+                    // being asked. Nine times in ten the misreading is right there.
+                    'understood_as' => $answer['parsed_summary'] ?? null,
+                ]);
+            }
         }
 
-        if ($comparator->matches($expected, $answer['rows'] ?? [], $ordered)) {
-            $tick('<fg=green>correct</>');
+        // Checks on the answer itself. They grade what a reference query cannot
+        // always say - that a figure falls in a plausible range, that a name
+        // made the list - and they close the loophole a bare reference leaves
+        // open: a SUM over no rows is one row holding NULL, the comparator
+        // skips NULLs, and a reference returning the same NULL "matches". An
+        // answer about no data graded correct.
+        if (!empty($q['expect'])) {
+            $unmet = $this->unmetExpectations((array) $q['expect'], $answer['rows'] ?? []);
 
-            return array_merge($row, ['status' => 'correct', 'understood_as' => $answer['parsed_summary'] ?? null]);
+            if ($unmet !== []) {
+                $tick('<fg=red>wrong</>');
+
+                return array_merge($row, [
+                    'reason' => 'expectation not met: ' . implode('; ', $unmet),
+                    'understood_as' => $answer['parsed_summary'] ?? null,
+                ]);
+            }
         }
 
-        $tick('<fg=red>wrong</>');
+        $tick('<fg=green>correct</>');
 
-        return array_merge($row, [
-            'reason' => 'different result',
-            'expected' => $comparator->preview($comparator->normalize($expected, $ordered)),
-            'got' => $comparator->preview($comparator->normalize($answer['rows'] ?? [], $ordered)),
-            // The most useful thing on a wrong answer: what it thought it was
-            // being asked. Nine times in ten the misreading is right there.
-            'understood_as' => $answer['parsed_summary'] ?? null,
-        ]);
+        return array_merge($row, ['status' => 'correct', 'understood_as' => $answer['parsed_summary'] ?? null]);
+    }
+
+    /**
+     * Why an `expect` block cannot be used, or null when it can.
+     */
+    private function invalidExpectation(mixed $expect): ?string
+    {
+        if (!is_array($expect)) {
+            return "'expect' must be an array of checks.";
+        }
+
+        $known = ['rows', 'min_rows', 'max_rows', 'min', 'max', 'column', 'contains'];
+        $unknown = array_diff(array_keys($expect), $known);
+
+        if ($unknown !== []) {
+            return "'expect' has unknown check(s): " . implode(', ', $unknown)
+                . '. Known: ' . implode(', ', $known) . '.';
+        }
+
+        foreach (['rows', 'min_rows', 'max_rows'] as $key) {
+            if (isset($expect[$key]) && (!is_int($expect[$key]) || $expect[$key] < 0)) {
+                return "'expect.{$key}' must be a whole number of rows.";
+            }
+        }
+
+        foreach (['min', 'max'] as $key) {
+            if (isset($expect[$key]) && !is_numeric($expect[$key])) {
+                return "'expect.{$key}' must be a number.";
+            }
+        }
+
+        if (isset($expect['column']) && !isset($expect['min']) && !isset($expect['max'])) {
+            return "'expect.column' names the value 'min' and 'max' check, and neither is set.";
+        }
+
+        return null;
+    }
+
+    /**
+     * Every check in `expect` the answer fails, in words a person can act on.
+     *
+     * @param  array<string, mixed>  $expect
+     * @param  array<int, mixed>  $rows
+     * @return array<int, string>
+     */
+    private function unmetExpectations(array $expect, array $rows): array
+    {
+        $unmet = [];
+        $count = count($rows);
+
+        if (isset($expect['rows']) && $count !== (int) $expect['rows']) {
+            $unmet[] = "{$count} row(s), expected exactly {$expect['rows']}";
+        }
+
+        if (isset($expect['min_rows']) && $count < (int) $expect['min_rows']) {
+            $unmet[] = "{$count} row(s), expected at least {$expect['min_rows']}";
+        }
+
+        if (isset($expect['max_rows']) && $count > (int) $expect['max_rows']) {
+            $unmet[] = "{$count} row(s), expected at most {$expect['max_rows']}";
+        }
+
+        if (isset($expect['min']) || isset($expect['max'])) {
+            $column = isset($expect['column']) ? (string) $expect['column'] : null;
+            $value = $this->checkedValue($rows, $column);
+
+            if ($value === null) {
+                $unmet[] = $column !== null
+                    ? "no number in column '{$column}' of the first row"
+                    : 'no number in the first row';
+            } else {
+                if (isset($expect['min']) && $value < (float) $expect['min']) {
+                    $unmet[] = "{$value} is below the minimum {$expect['min']}";
+                }
+
+                if (isset($expect['max']) && $value > (float) $expect['max']) {
+                    $unmet[] = "{$value} is above the maximum {$expect['max']}";
+                }
+            }
+        }
+
+        foreach ((array) ($expect['contains'] ?? []) as $wanted) {
+            if (!$this->rowsContain($rows, (string) $wanted)) {
+                $unmet[] = "no row contains '{$wanted}'";
+            }
+        }
+
+        return $unmet;
+    }
+
+    /**
+     * The number a min/max check reads: the named column of the first row, or
+     * the first numeric cell of it when no column is named.
+     *
+     * @param  array<int, mixed>  $rows
+     */
+    private function checkedValue(array $rows, ?string $column): ?float
+    {
+        $first = (array) ($rows[0] ?? []);
+
+        if ($column !== null) {
+            $value = $first[$column] ?? null;
+
+            return is_numeric($value) ? (float) $value : null;
+        }
+
+        foreach ($first as $value) {
+            if (is_numeric($value)) {
+                return (float) $value;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether any cell of any row equals $wanted, ignoring case and the space
+     * around it.
+     *
+     * @param  array<int, mixed>  $rows
+     */
+    private function rowsContain(array $rows, string $wanted): bool
+    {
+        $wanted = mb_strtolower(trim($wanted));
+
+        foreach ($rows as $row) {
+            foreach ((array) $row as $cell) {
+                if (is_scalar($cell) && mb_strtolower(trim((string) $cell)) === $wanted) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**

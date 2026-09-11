@@ -29,6 +29,21 @@
  * ("last quarter"), a filter and a grouping together. Those are where a
  * schema's missing descriptions show up.
  *
+ * CHECKS, INSTEAD OF OR AS WELL AS A REFERENCE
+ *
+ * A question may carry `expect` - checks on the answer itself:
+ *
+ *   'rows' => 1              exactly this many rows
+ *   'min_rows' / 'max_rows'  at least / at most this many
+ *   'min' / 'max'            the first number in the first row (or the
+ *                            column named by 'column') falls in this range
+ *   'contains' => ['Acme']   some row has a cell equal to each of these
+ *
+ * Use them where the right SQL is hard to write but a wrong answer is easy to
+ * recognise, and alongside a reference to catch what a comparison cannot: a
+ * SUM over no rows is one row of NULL, and a reference returning the same
+ * NULL would otherwise grade it correct. With both, both must hold.
+ *
  * Running this calls your AI provider once or more per question, so it costs
  * money. Nothing runs it implicitly.
  */
@@ -85,5 +100,20 @@ return [
         // Optional. Restricts this question to one dataset, the same as
         // passing a dataset to the API.
         // 'dataset' => 'orders',
+    ],
+    [
+        // No reference query - checks on the answer instead.
+        'question' => 'which customer spent the most',
+        'expect' => [
+            'rows' => 1,                  // one winner, not a list
+            'contains' => ['Acme Ltd'],   // the name you know should win
+        ],
+    ],
+
+    [
+        // Both: the reference must match AND the figure must be plausible.
+        'question' => 'total revenue this year',
+        'gold' => 'SELECT SUM(line_total) AS revenue FROM order_items',
+        'expect' => ['min' => 1],
     ],
 ];
