@@ -22,6 +22,7 @@ Each schema file in `config/jeeves-schemas/` tells the AI everything about one d
         'aggregatable' => true,           // summed per group (see below)
         'sortable' => true,               // can be used in ORDER BY
         'value_aliases' => ['Cancelled' => ['Canceled', 'Void']], // other names for a stored value
+        'correct_typos' => true,          // fix a misspelled value that matched nothing
     ],
 ],
 ```
@@ -69,6 +70,37 @@ typed is swapped for the stored one before the query runs:
   rewritten statement still goes through the validator.
 - It uses only what you wrote in the schema file. Nothing is read from the
   database for it, and nothing extra is sent to the model.
+
+### Misspelled values
+
+"Stock of Keybord" matches no row, and the honest answer to that is not "no
+data". Set `'correct_typos' => true` on a column, and when a query filtering on
+it comes back empty, each value it filtered on is compared with the values the
+column actually holds:
+
+```php
+'name' => [
+    'type' => 'varchar',
+    'correct_typos' => true,
+],
+```
+
+- **Only when the answer is empty.** A query that found rows is never touched.
+- **A stored value is never "corrected".** The empty answer is then true about
+  the other conditions.
+- **One clearly closest value, or nothing.** A different case is corrected at
+  any length; an edit or two only for values of five letters or more. Two
+  values equally close would be a guess, and are left alone.
+- **Once.** The corrected query is validated like any other and runs one more
+  time. If that is empty too, the answer is empty.
+- **Local.** The stored values are read through the same connection the answer
+  ran on and compared on your server. They are never sent to the model, and
+  correcting costs no provider call.
+- **Bounded.** A column with more than `value_correction.max_distinct` values
+  (1000 by default) is skipped rather than scanned - past that it is not a list
+  of names.
+
+Each correction is reported in `metadata.value_corrections`.
 
 ### Computed Metrics
 

@@ -26,6 +26,16 @@ scoped to the column and table that declare them, and the statement is still
 validated afterwards. Nothing in it is specific to any domain: it works the same
 for order statuses, country names or a renamed region.
 
+### A misspelled value is corrected instead of answered "no data"
+
+`correct_typos` on a column: when a query filtering on it finds nothing, the
+value typed is compared with the values the column holds, and one clearly
+closest - a different case, or an edit or two away - is swapped in for one more
+run. Each correction is reported in `metadata.value_corrections`. The stored
+values are read and compared on your server and never reach the model, and
+correcting costs no provider call. A stored value is never changed, ties are
+not guessed, and a column over `value_correction.max_distinct` is skipped.
+
 ## [1.1.0] - 2026-09-10
 
 ### Runs on Laravel 11

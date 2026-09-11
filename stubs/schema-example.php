@@ -110,6 +110,13 @@ return [
                     // 'value_aliases' => [
                     //     'Cancelled' => ['Canceled', 'Void'],
                     // ],
+                    // Optional: when a query filtering on this column finds
+                    // NOTHING, compare the value typed with the values stored
+                    // and retry once with a clearly closest one - a different
+                    // case, or an edit or two away. Read on your server and
+                    // never sent to the model. For columns with a manageable
+                    // number of values: names, categories, statuses.
+                    // 'correct_typos' => true,
                 ],
             ],
 

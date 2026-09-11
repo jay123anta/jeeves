@@ -350,6 +350,38 @@ return [
     ],
 
     // ==========================================================================
+    // MISSPELLED FILTER VALUES (per column, opt-in)
+    // ==========================================================================
+    // "stock of Keybord" matches no row, and without this the answer is "no
+    // data" - which is not true. The data is there; the spelling is not.
+    //
+    // Set 'correct_typos' => true on a column in its schema file. When a query
+    // comes back EMPTY, each value it filtered on is compared with the values
+    // that column actually holds, and one clearly closest value - a different
+    // case, or an edit or two away - is swapped in and the query runs once
+    // more. The answer reports the swap in metadata.value_corrections.
+    //
+    // PRIVACY. The stored values are read on YOUR server, through the same
+    // connection the answer ran on, and compared here. They are never sent to
+    // the model, and no provider call is made at all.
+    //
+    // Meant for columns with a manageable number of distinct values: product
+    // names, categories, statuses, place names. A column over max_distinct is
+    // skipped, never scanned.
+    'value_correction' => [
+        // The kill switch. Nothing happens unless a column opts in, so this is
+        // on by default and exists to turn the whole feature off at once.
+        'enabled' => (bool) env('JEEVES_VALUE_CORRECTION', true),
+
+        // Columns with more distinct values than this are not read.
+        'max_distinct' => (int) env('JEEVES_VALUE_CORRECTION_MAX_DISTINCT', 1000),
+
+        // Most edits tolerated. Values of 5-8 letters get at most 1; 9 or more
+        // get up to this. Shorter values are corrected for case only.
+        'max_distance' => (int) env('JEEVES_VALUE_CORRECTION_MAX_DISTANCE', 2),
+    ],
+
+    // ==========================================================================
     // GLOBAL EXAMPLE QUERIES (Multi-Dataset)
     // ==========================================================================
     // Example queries that span MULTIPLE datasets or help the AI understand

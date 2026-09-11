@@ -2489,8 +2489,7 @@ class QueryOrchestrator
      */
     protected function applyValueAliases(array $queryResult): array
     {
-        $sql = (string) ($queryResult['sql'] ?? '');
-        $lookup = $this->valueAliasLookup($sql);
+        $lookup = $this->valueAliasLookup((string) ($queryResult['sql'] ?? ''));
 
         if ($lookup === []) {
             return [$queryResult, []];
@@ -2498,17 +2497,7 @@ class QueryOrchestrator
 
         $applied = [];
 
-        // Wildcards around a value are kept. Intent mode escapes LIKE
-        // metacharacters with `!` inside a binding, so a binding that is a
-        // pattern is unescaped before it is compared and escaped again after.
-        $swap = function (string $value, bool $bangEscaped) use ($lookup, &$applied): ?string {
-            if (!preg_match('/^(%*)(.*?)(%*)$/s', $value, $m)) {
-                return null;
-            }
-
-            [, $pre, $core, $post] = $m;
-            $isPattern = $bangEscaped && ($pre !== '' || $post !== '');
-            $plain = $isPattern ? (string) preg_replace('/!(.)/s', '$1', $core) : $core;
+        $queryResult = $this->rewriteQueryValues($queryResult, function (string $plain) use ($lookup, &$applied): ?string {
             $hit = $lookup[mb_strtolower(trim($plain))] ?? null;
 
             if ($hit === null) {
@@ -2521,22 +2510,8 @@ class QueryOrchestrator
                 'column' => $hit['column'],
             ];
 
-            $to = $isPattern
-                ? str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $hit['to'])
-                : $hit['to'];
-
-            return $pre . $to . $post;
-        };
-
-        $queryResult['sql'] = SqlLiterals::map($sql, fn (string $v) => $swap($v, false));
-
-        if (isset($queryResult['bindings']) && is_array($queryResult['bindings'])) {
-            foreach ($queryResult['bindings'] as $i => $binding) {
-                if (is_string($binding) && ($swapped = $swap($binding, true)) !== null) {
-                    $queryResult['bindings'][$i] = $swapped;
-                }
-            }
-        }
+            return $hit['to'];
+        });
 
         return [$queryResult, array_values($applied)];
     }
@@ -2555,6 +2530,99 @@ class QueryOrchestrator
         $lookup = [];
         $conflicted = [];
 
+        $reachable = $this->reachableColumns(
+            $sql,
+            fn (array $definition) => is_array($definition['value_aliases'] ?? null) && $definition['value_aliases'] !== []
+        );
+
+        foreach ($reachable as $reach) {
+            foreach ($reach['definition']['value_aliases'] as $canonical => $variants) {
+                $canonical = (string) $canonical;
+
+                foreach ((array) $variants as $variant) {
+                    if (!is_string($variant) || ($key = mb_strtolower(trim($variant))) === '') {
+                        continue;
+                    }
+
+                    if (isset($lookup[$key]) && $lookup[$key]['to'] !== $canonical) {
+                        $conflicted[$key] = true;
+
+                        continue;
+                    }
+
+                    $lookup[$key] = ['to' => $canonical, 'column' => $reach['column']];
+                }
+            }
+        }
+
+        return array_diff_key($lookup, $conflicted);
+    }
+
+    /**
+     * Apply a decision to every VALUE in a statement - the model's inline
+     * literals and intent mode's bindings alike.
+     *
+     * `%` wildcards around a value are kept. Intent mode escapes LIKE
+     * metacharacters with `!` inside a binding, so a binding that is a pattern
+     * is unescaped before the decision sees it and escaped again after. One
+     * place for that, shared by every feature that changes a value, because
+     * two copies of escaping rules drift apart.
+     *
+     * @param  callable(string): ?string  $decide  plain value in, replacement or null out
+     * @return array<string, mixed>
+     */
+    protected function rewriteQueryValues(array $queryResult, callable $decide): array
+    {
+        $swap = function (string $value, bool $bangEscaped) use ($decide): ?string {
+            if (!preg_match('/^(%*)(.*?)(%*)$/s', $value, $m)) {
+                return null;
+            }
+
+            [, $pre, $core, $post] = $m;
+            $isPattern = $bangEscaped && ($pre !== '' || $post !== '');
+            $plain = $isPattern ? (string) preg_replace('/!(.)/s', '$1', $core) : $core;
+            $to = $decide($plain);
+
+            if ($to === null) {
+                return null;
+            }
+
+            if ($isPattern) {
+                $to = str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $to);
+            }
+
+            return $pre . $to . $post;
+        };
+
+        $queryResult['sql'] = SqlLiterals::map(
+            (string) ($queryResult['sql'] ?? ''),
+            fn (string $v) => $swap($v, false)
+        );
+
+        if (isset($queryResult['bindings']) && is_array($queryResult['bindings'])) {
+            foreach ($queryResult['bindings'] as $i => $binding) {
+                if (is_string($binding) && ($swapped = $swap($binding, true)) !== null) {
+                    $queryResult['bindings'][$i] = $swapped;
+                }
+            }
+        }
+
+        return $queryResult;
+    }
+
+    /**
+     * Columns a statement can reach: belonging to a table the statement names,
+     * and themselves named in it. The one scoping rule every value feature
+     * uses, so none of them can drift into touching a table the query never
+     * read.
+     *
+     * @param  callable(array<string, mixed>): bool  $wants
+     * @return array<int, array{table: string, column: string, definition: array<string, mixed>}>
+     */
+    protected function reachableColumns(string $sql, callable $wants): array
+    {
+        $out = [];
+
         foreach ($this->registry->all() as $schema) {
             $table = (string) ($schema['tables']['primary']['name'] ?? '');
             $short = str_contains($table, '.') ? substr($table, strrpos($table, '.') + 1) : $table;
@@ -2564,33 +2632,227 @@ class QueryOrchestrator
             }
 
             foreach ($schema['tables']['primary']['columns'] ?? [] as $column => $definition) {
-                $aliases = $definition['value_aliases'] ?? [];
-
-                if (!is_array($aliases) || $aliases === [] || !SqlLiterals::mentions($sql, (string) $column)) {
+                if (!is_array($definition) || !$wants($definition) || !SqlLiterals::mentions($sql, (string) $column)) {
                     continue;
                 }
 
-                foreach ($aliases as $canonical => $variants) {
-                    $canonical = (string) $canonical;
+                $out[] = ['table' => $table, 'column' => (string) $column, 'definition' => $definition];
+            }
+        }
 
-                    foreach ((array) $variants as $variant) {
-                        if (!is_string($variant) || ($key = mb_strtolower(trim($variant))) === '') {
-                            continue;
-                        }
+        return $out;
+    }
 
-                        if (isset($lookup[$key]) && $lookup[$key]['to'] !== $canonical) {
-                            $conflicted[$key] = true;
+    /**
+     * A filter value that matched nothing because it was misspelled, corrected
+     * to the closest value its column actually holds - for columns whose
+     * schema sets `correct_typos`.
+     *
+     * Without this, "stock of Keybord" answers "no data", which is not true:
+     * the data is there and the spelling is not. The honest response to an
+     * empty result that a typo explains is the corrected answer, labelled as
+     * corrected.
+     *
+     * PRIVACY. The stored values are read HERE, through the connection the
+     * answer itself ran on, and compared here. They are never sent to the
+     * model and no provider call is made - the corrected statement is the old
+     * one with a value changed, not a new generation. Whatever restricts what
+     * that connection can see restricts this too.
+     *
+     * Bounded to one extra run: the corrected statement goes back through
+     * validateAndExecute() - so it is validated and its required_filter
+     * checked like any other - carrying a flag that stops it correcting again.
+     * A value that is genuinely present is never "corrected"; the empty result
+     * is then a true answer about the other conditions.
+     */
+    protected function correctMisspelledValue(array $queryResult, ?string $dataset, array $metadata, ?string $connection): ?array
+    {
+        if (($metadata['_value_corrected'] ?? false) || !config('jeeves.value_correction.enabled', true)) {
+            return null;
+        }
 
-                            continue;
-                        }
+        $columns = $this->reachableColumns(
+            (string) ($queryResult['sql'] ?? ''),
+            fn (array $definition) => ($definition['correct_typos'] ?? false) === true
+        );
 
-                        $lookup[$key] = ['to' => $canonical, 'column' => (string) $column];
-                    }
+        if ($columns === []) {
+            return null;
+        }
+
+        // The values the statement filters on, read through the same walk
+        // that will rewrite them, so what is checked is what gets changed.
+        $values = [];
+        $this->rewriteQueryValues($queryResult, function (string $plain) use (&$values): ?string {
+            if (trim($plain) !== '') {
+                $values[trim($plain)] = true;
+            }
+
+            return null;
+        });
+
+        if ($values === []) {
+            return null;
+        }
+
+        $maxDistinct = max(1, (int) config('jeeves.value_correction.max_distinct', 1000));
+        $maxDistance = max(0, (int) config('jeeves.value_correction.max_distance', 2));
+
+        $stored = [];
+
+        foreach ($columns as $c) {
+            try {
+                $list = DB::connection($connection)
+                    ->table($c['table'])
+                    ->select($c['column'])
+                    ->distinct()
+                    ->whereNotNull($c['column'])
+                    ->limit($maxDistinct + 1)
+                    ->pluck($c['column'])
+                    ->all();
+            } catch (\Throwable $e) {
+                Log::info('[Jeeves] Value correction could not read a column', [
+                    'column' => $c['column'],
+                    'error' => $this->sanitizeDbError($e->getMessage()),
+                ]);
+
+                continue;
+            }
+
+            // Over the cap, the column is not a list of names and a nearest
+            // match in it means nothing. Skipped, and said so.
+            if (count($list) > $maxDistinct) {
+                Log::info('[Jeeves] Value correction skipped a column with too many values', [
+                    'column' => $c['column'],
+                    'max_distinct' => $maxDistinct,
+                ]);
+
+                continue;
+            }
+
+            $stored[$c['column']] = array_values(array_filter(
+                array_map(fn ($v) => is_scalar($v) ? (string) $v : null, $list),
+                fn ($v) => $v !== null && $v !== ''
+            ));
+        }
+
+        if ($stored === []) {
+            return null;
+        }
+
+        $corrections = [];
+
+        foreach (array_keys($values) as $value) {
+            if ($fix = $this->closestStoredValue((string) $value, $stored, $maxDistance)) {
+                $corrections[$value] = $fix;
+            }
+        }
+
+        if ($corrections === []) {
+            return null;
+        }
+
+        $applied = [];
+
+        $corrected = $this->rewriteQueryValues($queryResult, function (string $plain) use ($corrections, &$applied): ?string {
+            $fix = $corrections[trim($plain)] ?? null;
+
+            if ($fix === null) {
+                return null;
+            }
+
+            $applied[$plain . "\0" . $fix['to'] . "\0" . $fix['column']] = [
+                'from' => $plain,
+                'to' => $fix['to'],
+                'column' => $fix['column'],
+            ];
+
+            return $fix['to'];
+        });
+
+        Log::info('[Jeeves] Corrected a filter value that matched nothing', [
+            'corrections' => count($applied),
+        ]);
+
+        $metadata['_value_corrected'] = true;
+        $metadata['value_corrections'] = array_values($applied);
+
+        return $this->validateAndExecute($corrected, $dataset, $metadata);
+    }
+
+    /**
+     * The one stored value a typed value most plausibly meant, or null.
+     *
+     * In order: present exactly - nothing to correct, the empty result is
+     * real. The same value in a different case - the commonest empty result on
+     * a case-sensitive database, and safe at any length. Otherwise an edit or
+     * two away, for values of five letters or more only, because short values
+     * are where a near-miss stops being a typo and starts being a different
+     * value. Anything two stored values match equally well is a guess, and
+     * returns null.
+     *
+     * @param  array<string, array<int, string>>  $stored  column => values
+     * @return array{to: string, column: string}|null
+     */
+    protected function closestStoredValue(string $value, array $stored, int $maxDistance): ?array
+    {
+        foreach ($stored as $values) {
+            if (in_array($value, $values, true)) {
+                return null;
+            }
+        }
+
+        $lower = mb_strtolower($value);
+        $caseHits = [];
+
+        foreach ($stored as $column => $values) {
+            foreach ($values as $candidate) {
+                if (mb_strtolower($candidate) === $lower) {
+                    $caseHits[$candidate . "\0" . $column] = ['to' => $candidate, 'column' => (string) $column];
                 }
             }
         }
 
-        return array_diff_key($lookup, $conflicted);
+        if (count($caseHits) === 1) {
+            return array_values($caseHits)[0];
+        }
+
+        if ($caseHits !== []) {
+            return null;
+        }
+
+        $length = mb_strlen($lower);
+
+        if ($length < 5 || $maxDistance < 1) {
+            return null;
+        }
+
+        $allowed = min($maxDistance, $length >= 9 ? 2 : 1);
+        $best = null;
+        $tied = false;
+
+        foreach ($stored as $column => $values) {
+            foreach ($values as $candidate) {
+                $distance = levenshtein($lower, mb_strtolower($candidate));
+
+                if ($distance > $allowed) {
+                    continue;
+                }
+
+                if ($best === null || $distance < $best['distance']) {
+                    $best = ['to' => $candidate, 'column' => (string) $column, 'distance' => $distance];
+                    $tied = false;
+                } elseif ($distance === $best['distance'] && $candidate !== $best['to']) {
+                    $tied = true;
+                }
+            }
+        }
+
+        if ($best === null || $tied) {
+            return null;
+        }
+
+        return ['to' => $best['to'], 'column' => $best['column']];
     }
 
     protected function validateAndExecute(array $queryResult, ?string $dataset, array $metadata): array
@@ -2725,6 +2987,13 @@ class QueryOrchestrator
 
         // Empty results
         if (empty($rows)) {
+            // A filter value that matched nothing because it was misspelled.
+            // Opt-in per column (`correct_typos`), bounded to one extra run,
+            // and entirely local - see correctMisspelledValue().
+            if ($corrected = $this->correctMisspelledValue($queryResult, $dataset, $metadata, $connection)) {
+                return $corrected;
+            }
+
             $response = $this->formatter->formatNoData($queryResult);
             $response['metadata'] = $metadata;
 
