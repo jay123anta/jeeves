@@ -23,6 +23,7 @@ use Jayanta\Jeeves\Schema\SchemaRegistry;
 use Jayanta\Jeeves\Security\ExecutionConnection;
 use Jayanta\Jeeves\Security\InputGuard;
 use Jayanta\Jeeves\Support\QuestionForLog;
+use Jayanta\Jeeves\Support\SqlLiterals;
 
 /**
  * Query Orchestrator - Main Engine
@@ -2470,6 +2471,128 @@ class QueryOrchestrator
         );
     }
 
+    /**
+     * Swap a value the user typed for the one the database stores, where a
+     * schema declares the pair in a column's `value_aliases`.
+     *
+     * An alias applies only where it was declared: to a column of a table the
+     * statement actually reads, and only when that column is compared in the
+     * statement. The same word elsewhere is somebody's data - another table may
+     * still store the old name, and a free-text column may contain it for
+     * reasons of its own.
+     *
+     * Values only. The structure of the statement is never touched, and it
+     * still goes through SqlValidator on the next line, so this cannot be a
+     * way past the whitelist.
+     *
+     * @return array{0: array<string, mixed>, 1: array<int, array{from: string, to: string, column: string}>}
+     */
+    protected function applyValueAliases(array $queryResult): array
+    {
+        $sql = (string) ($queryResult['sql'] ?? '');
+        $lookup = $this->valueAliasLookup($sql);
+
+        if ($lookup === []) {
+            return [$queryResult, []];
+        }
+
+        $applied = [];
+
+        // Wildcards around a value are kept. Intent mode escapes LIKE
+        // metacharacters with `!` inside a binding, so a binding that is a
+        // pattern is unescaped before it is compared and escaped again after.
+        $swap = function (string $value, bool $bangEscaped) use ($lookup, &$applied): ?string {
+            if (!preg_match('/^(%*)(.*?)(%*)$/s', $value, $m)) {
+                return null;
+            }
+
+            [, $pre, $core, $post] = $m;
+            $isPattern = $bangEscaped && ($pre !== '' || $post !== '');
+            $plain = $isPattern ? (string) preg_replace('/!(.)/s', '$1', $core) : $core;
+            $hit = $lookup[mb_strtolower(trim($plain))] ?? null;
+
+            if ($hit === null) {
+                return null;
+            }
+
+            $applied[$plain . "\0" . $hit['to'] . "\0" . $hit['column']] = [
+                'from' => $plain,
+                'to' => $hit['to'],
+                'column' => $hit['column'],
+            ];
+
+            $to = $isPattern
+                ? str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $hit['to'])
+                : $hit['to'];
+
+            return $pre . $to . $post;
+        };
+
+        $queryResult['sql'] = SqlLiterals::map($sql, fn (string $v) => $swap($v, false));
+
+        if (isset($queryResult['bindings']) && is_array($queryResult['bindings'])) {
+            foreach ($queryResult['bindings'] as $i => $binding) {
+                if (is_string($binding) && ($swapped = $swap($binding, true)) !== null) {
+                    $queryResult['bindings'][$i] = $swapped;
+                }
+            }
+        }
+
+        return [$queryResult, array_values($applied)];
+    }
+
+    /**
+     * Lower-cased alias => [canonical value, column], for the columns this
+     * statement can reach. An alias that two reachable columns map to
+     * DIFFERENT values is dropped entirely - which one the user meant is not
+     * knowable from here, and a rename applied to the wrong column is worse
+     * than none.
+     *
+     * @return array<string, array{to: string, column: string}>
+     */
+    protected function valueAliasLookup(string $sql): array
+    {
+        $lookup = [];
+        $conflicted = [];
+
+        foreach ($this->registry->all() as $schema) {
+            $table = (string) ($schema['tables']['primary']['name'] ?? '');
+            $short = str_contains($table, '.') ? substr($table, strrpos($table, '.') + 1) : $table;
+
+            if ($short === '' || !SqlLiterals::mentions($sql, $short)) {
+                continue;
+            }
+
+            foreach ($schema['tables']['primary']['columns'] ?? [] as $column => $definition) {
+                $aliases = $definition['value_aliases'] ?? [];
+
+                if (!is_array($aliases) || $aliases === [] || !SqlLiterals::mentions($sql, (string) $column)) {
+                    continue;
+                }
+
+                foreach ($aliases as $canonical => $variants) {
+                    $canonical = (string) $canonical;
+
+                    foreach ((array) $variants as $variant) {
+                        if (!is_string($variant) || ($key = mb_strtolower(trim($variant))) === '') {
+                            continue;
+                        }
+
+                        if (isset($lookup[$key]) && $lookup[$key]['to'] !== $canonical) {
+                            $conflicted[$key] = true;
+
+                            continue;
+                        }
+
+                        $lookup[$key] = ['to' => $canonical, 'column' => (string) $column];
+                    }
+                }
+            }
+        }
+
+        return array_diff_key($lookup, $conflicted);
+    }
+
     protected function validateAndExecute(array $queryResult, ?string $dataset, array $metadata): array
     {
         $sql = $queryResult['sql'];
@@ -2489,6 +2612,22 @@ class QueryOrchestrator
         // value anything here supports; that is fixed in PromptBuilder, and
         // this catches whatever a model invents regardless.
         $queryResult['query_type'] = $this->normalizeQueryType($queryResult['query_type'] ?? null);
+
+        // Value aliases (a column's `value_aliases` in its schema file): a
+        // renamed or variant-spelled value becomes the one the database
+        // stores. HERE and nowhere else, for the reason required_filter is
+        // checked below: this is the single place SQL runs, so the model's
+        // literals, intent mode's bindings, the verifier's rewrite, a cached
+        // recipe and each step of a decomposed question all pass through it.
+        //
+        // Before validation, so the statement validated is the statement run,
+        // and before lastSql, so the event describes the query that RAN.
+        [$queryResult, $aliased] = $this->applyValueAliases($queryResult);
+        $sql = $queryResult['sql'];
+
+        if ($aliased !== []) {
+            $metadata['value_aliases_applied'] = $aliased;
+        }
 
         // Remembered for the QuestionAnswered event, which is server-side.
         // The SQL is deliberately kept OUT of the HTTP response -  a browser has

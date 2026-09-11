@@ -21,6 +21,7 @@ Each schema file in `config/jeeves-schemas/` tells the AI everything about one d
         'groupable' => true,              // can be used in GROUP BY
         'aggregatable' => true,           // summed per group (see below)
         'sortable' => true,               // can be used in ORDER BY
+        'value_aliases' => ['Cancelled' => ['Canceled', 'Void']], // other names for a stored value
     ],
 ],
 ```
@@ -34,6 +35,40 @@ district with pre-computed totals), omit `aggregatable` (use `sortable`
 alone) and rows are read as-is with no GROUP BY. Computed metrics whose
 expression already aggregates (`SUM`/`COUNT`/`AVG`/`MIN`/`MAX`) are grouped
 as-is and never double-wrapped.
+
+### Other names for a stored value
+
+A value often has more names than the one your database stores. A region was
+renamed and people still use the old name, a status is spelled two ways, a
+country goes by three names. Declare them on the column, and the name the user
+typed is swapped for the stored one before the query runs:
+
+```php
+'status' => [
+    'type' => 'varchar',
+    'value_aliases' => [
+        'cancelled' => ['canceled', 'void'],
+    ],
+],
+'country' => [
+    'type' => 'varchar',
+    'value_aliases' => [
+        'United Kingdom' => ['UK', 'Great Britain', 'Britain'],
+    ],
+],
+```
+
+- **Exact matches**, case-insensitive, with `%` wildcards around a value kept.
+  Nothing fuzzy, so a short alias like `UK` is safe.
+- **Scoped to where you declared it**: that column, in a query that reads that
+  table. Another table that still stores the old name is left alone.
+- **Both routes**: the model's inline literals and intent mode's bindings.
+- An alias that two reachable columns map to *different* values is ignored,
+  not guessed.
+- The response reports every swap in `metadata.value_aliases_applied`, and the
+  rewritten statement still goes through the validator.
+- It uses only what you wrote in the schema file. Nothing is read from the
+  database for it, and nothing extra is sent to the model.
 
 ### Computed Metrics
 

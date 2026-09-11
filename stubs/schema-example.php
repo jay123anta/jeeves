@@ -103,6 +103,13 @@ return [
                     'filterable' => true,
                     // Optional: list known values to help AI filter correctly
                     // 'values' => ['Active', 'Inactive', 'Pending'],
+                    // Optional: other names for a stored value. What the user
+                    // typed is swapped for the name on the left before the
+                    // query runs - for renames, spelling variants, synonyms.
+                    // Exact matches only, and only for this column of this table.
+                    // 'value_aliases' => [
+                    //     'Cancelled' => ['Canceled', 'Void'],
+                    // ],
                 ],
             ],
 

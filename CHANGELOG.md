@@ -16,6 +16,16 @@ datasets match equally well is left to the model rather than guessed. It runs on
 the generation path only, never inside the check that decides whether a cached
 answer belongs to the question being asked.
 
+### A renamed or variant-spelled value still finds its rows
+
+`value_aliases` on any column: other names for a stored value - a rename, a
+spelling variant, a synonym. The name a user typed is swapped for the stored one
+before the query runs, on both the SQL-generation and intent routes, and the
+response reports it in `metadata.value_aliases_applied`. Exact matches only,
+scoped to the column and table that declare them, and the statement is still
+validated afterwards. Nothing in it is specific to any domain: it works the same
+for order statuses, country names or a renamed region.
+
 ## [1.1.0] - 2026-09-10
 
 ### Runs on Laravel 11
