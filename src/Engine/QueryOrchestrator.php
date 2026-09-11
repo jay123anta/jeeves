@@ -2469,92 +2469,99 @@ class QueryOrchestrator
      * Swap a value the user typed for the one the database stores, where a
      * schema declares the pair in a column's `value_aliases`.
      *
-     * An alias applies only where it was declared: to a column of a table the
-     * statement actually reads, and only when that column is compared in the
-     * statement. The same word elsewhere is somebody's data - another table may
-     * still store the old name, and a free-text column may contain it for
-     * reasons of its own.
+     * A value is swapped only when it is COMPARED WITH that column - `district
+     * = 'Karimganj'`, `LOWER(u.district) LIKE '%karimganj%'`, an item of `IN
+     * (...)` - in a table the statement reads. The first version checked only
+     * that the column appeared somewhere, so selecting `district` licensed a
+     * rewrite of a value compared to a free-text column in the same query.
      *
      * Values only. The structure of the statement is never touched, and it
-     * still goes through SqlValidator on the next line, so this cannot be a
-     * way past the whitelist.
+     * still goes through SqlValidator on the next line.
      *
      * @return array{0: array<string, mixed>, 1: array<int, array{from: string, to: string, column: string}>}
      */
     protected function applyValueAliases(array $queryResult): array
     {
-        $lookup = $this->valueAliasLookup((string) ($queryResult['sql'] ?? ''));
-
-        if ($lookup === []) {
-            return [$queryResult, []];
-        }
-
-        $applied = [];
-
-        $queryResult = $this->rewriteQueryValues($queryResult, function (string $plain) use ($lookup, &$applied): ?string {
-            $hit = $lookup[mb_strtolower(trim($plain))] ?? null;
-
-            if ($hit === null) {
-                return null;
-            }
-
-            $applied[$plain . "\0" . $hit['to'] . "\0" . $hit['column']] = [
-                'from' => $plain,
-                'to' => $hit['to'],
-                'column' => $hit['column'],
-            ];
-
-            return $hit['to'];
-        });
-
-        return [$queryResult, array_values($applied)];
-    }
-
-    /**
-     * Lower-cased alias => [canonical value, column], for the columns this
-     * statement can reach. An alias that two reachable columns map to
-     * DIFFERENT values is dropped entirely - which one the user meant is not
-     * knowable from here, and a rename applied to the wrong column is worse
-     * than none.
-     *
-     * @return array<string, array{to: string, column: string}>
-     */
-    protected function valueAliasLookup(string $sql): array
-    {
-        $lookup = [];
-        $conflicted = [];
+        $sql = (string) ($queryResult['sql'] ?? '');
 
         $reachable = $this->reachableColumns(
             $sql,
             fn (array $definition) => is_array($definition['value_aliases'] ?? null) && $definition['value_aliases'] !== []
         );
 
-        foreach ($reachable as $reach) {
-            foreach ($reach['definition']['value_aliases'] as $canonical => $variants) {
-                $canonical = (string) $canonical;
+        if ($reachable === []) {
+            return [$queryResult, []];
+        }
 
-                foreach ((array) $variants as $variant) {
-                    if (!is_string($variant) || ($key = mb_strtolower(trim($variant))) === '') {
-                        continue;
-                    }
+        $tables = SqlLiterals::tableAliases($sql);
+        $applied = [];
 
-                    if (isset($lookup[$key]) && $lookup[$key]['to'] !== $canonical) {
-                        $conflicted[$key] = true;
+        $queryResult = $this->rewriteQueryValues(
+            $queryResult,
+            function (string $plain, ?string $reference) use ($reachable, $tables, &$applied): ?string {
+                $target = $this->resolveComparedColumn($reference, $reachable, $tables);
 
-                        continue;
-                    }
-
-                    $lookup[$key] = ['to' => $canonical, 'column' => $reach['column']];
+                if ($target === null) {
+                    return null;
                 }
+
+                $to = $this->valueAliasFor($plain, $target['definition']['value_aliases']);
+
+                if ($to === null) {
+                    return null;
+                }
+
+                $applied[$plain . "\0" . $to . "\0" . $target['column']] = [
+                    'from' => $plain,
+                    'to' => $to,
+                    'column' => $target['column'],
+                ];
+
+                return $to;
+            }
+        );
+
+        return [$queryResult, array_values($applied)];
+    }
+
+    /**
+     * The stored value a column declares $plain to be another name for, or
+     * null. A variant listed under two different stored values is ambiguous
+     * and returns null: which one was meant is not knowable from here.
+     *
+     * @param  array<mixed>  $aliases  canonical => variant or list of variants
+     */
+    protected function valueAliasFor(string $plain, array $aliases): ?string
+    {
+        $key = mb_strtolower(trim($plain));
+
+        if ($key === '') {
+            return null;
+        }
+
+        $found = null;
+
+        foreach ($aliases as $canonical => $variants) {
+            foreach ((array) $variants as $variant) {
+                if (!is_string($variant) || mb_strtolower(trim($variant)) !== $key) {
+                    continue;
+                }
+
+                if ($found !== null && $found !== (string) $canonical) {
+                    return null;
+                }
+
+                $found = (string) $canonical;
             }
         }
 
-        return array_diff_key($lookup, $conflicted);
+        return $found;
     }
 
     /**
      * Apply a decision to every VALUE in a statement - the model's inline
-     * literals and intent mode's bindings alike.
+     * literals and intent mode's positional bindings alike - telling the
+     * decision which column each value is compared with.
      *
      * `%` wildcards around a value are kept. Intent mode escapes LIKE
      * metacharacters with `!` inside a binding, so a binding that is a pattern
@@ -2562,12 +2569,14 @@ class QueryOrchestrator
      * place for that, shared by every feature that changes a value, because
      * two copies of escaping rules drift apart.
      *
-     * @param  callable(string): ?string  $decide  plain value in, replacement or null out
+     * @param  callable(string, ?string): ?string  $decide  plain value and compared column in, replacement or null out
      * @return array<string, mixed>
      */
     protected function rewriteQueryValues(array $queryResult, callable $decide): array
     {
-        $swap = function (string $value, bool $bangEscaped) use ($decide): ?string {
+        $sql = (string) ($queryResult['sql'] ?? '');
+
+        $swap = function (string $value, bool $bangEscaped, ?string $column) use ($decide): ?string {
             if (!preg_match('/^(%*)(.*?)(%*)$/s', $value, $m)) {
                 return null;
             }
@@ -2575,7 +2584,7 @@ class QueryOrchestrator
             [, $pre, $core, $post] = $m;
             $isPattern = $bangEscaped && ($pre !== '' || $post !== '');
             $plain = $isPattern ? (string) preg_replace('/!(.)/s', '$1', $core) : $core;
-            $to = $decide($plain);
+            $to = $decide($plain, $column);
 
             if ($to === null) {
                 return null;
@@ -2588,14 +2597,22 @@ class QueryOrchestrator
             return $pre . $to . $post;
         };
 
-        $queryResult['sql'] = SqlLiterals::map(
-            (string) ($queryResult['sql'] ?? ''),
-            fn (string $v) => $swap($v, false)
+        // Read from the ORIGINAL statement: rewriting literals changes no
+        // placeholder, so the positions line up with the bindings either way.
+        $placeholderColumns = SqlLiterals::placeholderColumns($sql);
+
+        $queryResult['sql'] = SqlLiterals::mapCompared(
+            $sql,
+            fn (string $v, ?string $column) => $swap($v, false, $column)
         );
 
         if (isset($queryResult['bindings']) && is_array($queryResult['bindings'])) {
+            $position = 0;
+
             foreach ($queryResult['bindings'] as $i => $binding) {
-                if (is_string($binding) && ($swapped = $swap($binding, true)) !== null) {
+                $column = $placeholderColumns[$position++] ?? null;
+
+                if (is_string($binding) && ($swapped = $swap($binding, true, $column)) !== null) {
                     $queryResult['bindings'][$i] = $swapped;
                 }
             }
@@ -2619,7 +2636,7 @@ class QueryOrchestrator
 
         foreach ($this->registry->all() as $schema) {
             $table = (string) ($schema['tables']['primary']['name'] ?? '');
-            $short = str_contains($table, '.') ? substr($table, strrpos($table, '.') + 1) : $table;
+            $short = $this->shortTableName($table);
 
             if ($short === '' || !SqlLiterals::mentions($sql, $short)) {
                 continue;
@@ -2638,26 +2655,104 @@ class QueryOrchestrator
     }
 
     /**
+     * The reachable column a compared reference points at, or null.
+     *
+     * `u.district` is resolved through the statement's own FROM/JOIN aliases,
+     * so it reaches the table `u` stands for and no other. A bare `district`
+     * resolves only when exactly one reachable table has that column - two is
+     * ambiguous, and an ambiguous reference is never rewritten.
+     *
+     * @param  array<int, array{table: string, column: string, definition: array<string, mixed>}>  $reachable
+     * @param  array<string, string>  $tables  from SqlLiterals::tableAliases()
+     * @return array{table: string, column: string, definition: array<string, mixed>}|null
+     */
+    protected function resolveComparedColumn(?string $reference, array $reachable, array $tables): ?array
+    {
+        if ($reference === null || $reference === '') {
+            return null;
+        }
+
+        $parts = explode('.', $reference);
+        $column = strtolower((string) array_pop($parts));
+        $qualifier = $parts === [] ? null : strtolower((string) end($parts));
+
+        $matches = [];
+
+        foreach ($reachable as $reach) {
+            if (strtolower($reach['column']) !== $column) {
+                continue;
+            }
+
+            if ($qualifier !== null) {
+                $table = $tables[$qualifier] ?? null;
+
+                if ($table === null || $this->shortTableName($table) !== $this->shortTableName($reach['table'])) {
+                    continue;
+                }
+            }
+
+            $matches[$reach['table']] = $reach;
+        }
+
+        return count($matches) === 1 ? array_values($matches)[0] : null;
+    }
+
+    /** `schema.table` and `table` alike become `table`, lower-cased. */
+    protected function shortTableName(string $table): string
+    {
+        return strtolower(str_contains($table, '.') ? substr($table, strrpos($table, '.') + 1) : $table);
+    }
+
+    /**
+     * Whether rows carry no answer: none at all, or a single row whose every
+     * cell is NULL or zero - what an ungrouped SUM or COUNT returns when its
+     * filter matched nothing.
+     *
+     * Only ever the trigger for an ATTEMPT at correction. A zero that is true
+     * - the filtered value really is stored - is left alone by the correction
+     * itself, which never touches a stored value.
+     *
+     * @param  array<int, mixed>  $rows
+     */
+    protected function answerCarriesNoData(array $rows): bool
+    {
+        if ($rows === []) {
+            return true;
+        }
+
+        if (count($rows) !== 1) {
+            return false;
+        }
+
+        foreach ((array) $rows[0] as $cell) {
+            if ($cell !== null && !(is_numeric($cell) && (float) $cell === 0.0)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * A filter value that matched nothing because it was misspelled, corrected
-     * to the closest value its column actually holds - for columns whose
+     * to the closest value ITS column actually holds - for columns whose
      * schema sets `correct_typos`.
      *
      * Without this, "stock of Keybord" answers "no data", which is not true:
-     * the data is there and the spelling is not. The honest response to an
-     * empty result that a typo explains is the corrected answer, labelled as
-     * corrected.
+     * the data is there and the spelling is not.
+     *
+     * Each value is checked only against the column it is compared with. The
+     * first version compared every value with every opted-in column, so a
+     * value filtered on `category` could be "corrected" into a product name.
      *
      * PRIVACY. The stored values are read HERE, through the connection the
      * answer itself ran on, and compared here. They are never sent to the
      * model and no provider call is made - the corrected statement is the old
-     * one with a value changed, not a new generation. Whatever restricts what
-     * that connection can see restricts this too.
+     * one with a value changed, not a new generation.
      *
      * Bounded to one extra run: the corrected statement goes back through
-     * validateAndExecute() - so it is validated and its required_filter
-     * checked like any other - carrying a flag that stops it correcting again.
-     * A value that is genuinely present is never "corrected"; the empty result
-     * is then a true answer about the other conditions.
+     * validateAndExecute() - validated, required_filter checked - carrying a
+     * flag that stops it correcting again.
      */
     protected function correctMisspelledValue(array $queryResult, ?string $dataset, array $metadata, ?string $connection): ?array
     {
@@ -2665,80 +2760,61 @@ class QueryOrchestrator
             return null;
         }
 
-        $columns = $this->reachableColumns(
-            (string) ($queryResult['sql'] ?? ''),
+        $sql = (string) ($queryResult['sql'] ?? '');
+
+        $reachable = $this->reachableColumns(
+            $sql,
             fn (array $definition) => ($definition['correct_typos'] ?? false) === true
         );
 
-        if ($columns === []) {
+        if ($reachable === []) {
             return null;
         }
 
-        // The values the statement filters on, read through the same walk
-        // that will rewrite them, so what is checked is what gets changed.
-        $values = [];
-        $this->rewriteQueryValues($queryResult, function (string $plain) use (&$values): ?string {
-            if (trim($plain) !== '') {
-                $values[trim($plain)] = true;
+        $tables = SqlLiterals::tableAliases($sql);
+
+        // Each value the statement filters on, grouped by the column it is
+        // compared with - read through the same walk that will rewrite them,
+        // so what is checked is exactly what gets changed.
+        $targets = [];
+
+        $this->rewriteQueryValues(
+            $queryResult,
+            function (string $plain, ?string $reference) use ($reachable, $tables, &$targets): ?string {
+                $target = $this->resolveComparedColumn($reference, $reachable, $tables);
+
+                if ($target !== null && trim($plain) !== '') {
+                    $key = $target['table'] . "\0" . $target['column'];
+                    $targets[$key]['reach'] = $target;
+                    $targets[$key]['values'][trim($plain)] = true;
+                }
+
+                return null;
             }
+        );
 
-            return null;
-        });
-
-        if ($values === []) {
+        if ($targets === []) {
             return null;
         }
 
         $maxDistinct = max(1, (int) config('jeeves.value_correction.max_distinct', 1000));
         $maxDistance = max(0, (int) config('jeeves.value_correction.max_distance', 2));
 
-        $stored = [];
-
-        foreach ($columns as $c) {
-            try {
-                $list = DB::connection($connection)
-                    ->table($c['table'])
-                    ->select($c['column'])
-                    ->distinct()
-                    ->whereNotNull($c['column'])
-                    ->limit($maxDistinct + 1)
-                    ->pluck($c['column'])
-                    ->all();
-            } catch (\Throwable $e) {
-                Log::info('[Jeeves] Value correction could not read a column', [
-                    'column' => $c['column'],
-                    'error' => $this->sanitizeDbError($e->getMessage()),
-                ]);
-
-                continue;
-            }
-
-            // Over the cap, the column is not a list of names and a nearest
-            // match in it means nothing. Skipped, and said so.
-            if (count($list) > $maxDistinct) {
-                Log::info('[Jeeves] Value correction skipped a column with too many values', [
-                    'column' => $c['column'],
-                    'max_distinct' => $maxDistinct,
-                ]);
-
-                continue;
-            }
-
-            $stored[$c['column']] = array_values(array_filter(
-                array_map(fn ($v) => is_scalar($v) ? (string) $v : null, $list),
-                fn ($v) => $v !== null && $v !== ''
-            ));
-        }
-
-        if ($stored === []) {
-            return null;
-        }
-
         $corrections = [];
 
-        foreach (array_keys($values) as $value) {
-            if ($fix = $this->closestStoredValue((string) $value, $stored, $maxDistance)) {
-                $corrections[$value] = $fix;
+        foreach ($targets as $key => $target) {
+            $stored = $this->storedValues($connection, $target['reach'], $maxDistinct);
+
+            if ($stored === null) {
+                continue;
+            }
+
+            foreach (array_keys($target['values']) as $value) {
+                $to = $this->closestStoredValue((string) $value, $stored, $maxDistance);
+
+                if ($to !== null) {
+                    $corrections[$key][(string) $value] = $to;
+                }
             }
         }
 
@@ -2748,21 +2824,30 @@ class QueryOrchestrator
 
         $applied = [];
 
-        $corrected = $this->rewriteQueryValues($queryResult, function (string $plain) use ($corrections, &$applied): ?string {
-            $fix = $corrections[trim($plain)] ?? null;
+        $corrected = $this->rewriteQueryValues(
+            $queryResult,
+            function (string $plain, ?string $reference) use ($reachable, $tables, $corrections, &$applied): ?string {
+                $target = $this->resolveComparedColumn($reference, $reachable, $tables);
 
-            if ($fix === null) {
-                return null;
+                if ($target === null) {
+                    return null;
+                }
+
+                $to = $corrections[$target['table'] . "\0" . $target['column']][trim($plain)] ?? null;
+
+                if ($to === null) {
+                    return null;
+                }
+
+                $applied[$plain . "\0" . $to . "\0" . $target['column']] = [
+                    'from' => $plain,
+                    'to' => $to,
+                    'column' => $target['column'],
+                ];
+
+                return $to;
             }
-
-            $applied[$plain . "\0" . $fix['to'] . "\0" . $fix['column']] = [
-                'from' => $plain,
-                'to' => $fix['to'],
-                'column' => $fix['column'],
-            ];
-
-            return $fix['to'];
-        });
+        );
 
         Log::info('[Jeeves] Corrected a filter value that matched nothing', [
             'corrections' => count($applied),
@@ -2775,40 +2860,75 @@ class QueryOrchestrator
     }
 
     /**
+     * The distinct values one column holds, read through the connection the
+     * answer ran on - or null when they cannot be read, or there are more of
+     * them than max_distinct, in which case the column is not a list of names
+     * and a nearest match in it means nothing.
+     *
+     * @param  array{table: string, column: string, definition: array<string, mixed>}  $reach
+     * @return array<int, string>|null
+     */
+    protected function storedValues(?string $connection, array $reach, int $maxDistinct): ?array
+    {
+        try {
+            $list = DB::connection($connection)
+                ->table($reach['table'])
+                ->select($reach['column'])
+                ->distinct()
+                ->whereNotNull($reach['column'])
+                ->limit($maxDistinct + 1)
+                ->pluck($reach['column'])
+                ->all();
+        } catch (\Throwable $e) {
+            Log::info('[Jeeves] Value correction could not read a column', [
+                'column' => $reach['column'],
+                'error' => $this->sanitizeDbError($e->getMessage()),
+            ]);
+
+            return null;
+        }
+
+        if (count($list) > $maxDistinct) {
+            Log::info('[Jeeves] Value correction skipped a column with too many values', [
+                'column' => $reach['column'],
+                'max_distinct' => $maxDistinct,
+            ]);
+
+            return null;
+        }
+
+        return array_values(array_filter(
+            array_map(fn ($v) => is_scalar($v) ? (string) $v : null, $list),
+            fn ($v) => $v !== null && $v !== ''
+        ));
+    }
+
+    /**
      * The one stored value a typed value most plausibly meant, or null.
      *
-     * In order: present exactly - nothing to correct, the empty result is
+     * In order: present exactly - nothing to correct, the empty answer is
      * real. The same value in a different case - the commonest empty result on
      * a case-sensitive database, and safe at any length. Otherwise an edit or
      * two away, for values of five letters or more only, because short values
      * are where a near-miss stops being a typo and starts being a different
-     * value. Anything two stored values match equally well is a guess, and
-     * returns null.
+     * value. Anything two stored values match equally well returns null.
      *
-     * @param  array<string, array<int, string>>  $stored  column => values
-     * @return array{to: string, column: string}|null
+     * @param  array<int, string>  $stored  one column's values
      */
-    protected function closestStoredValue(string $value, array $stored, int $maxDistance): ?array
+    protected function closestStoredValue(string $value, array $stored, int $maxDistance): ?string
     {
-        foreach ($stored as $values) {
-            if (in_array($value, $values, true)) {
-                return null;
-            }
+        if (in_array($value, $stored, true)) {
+            return null;
         }
 
         $lower = mb_strtolower($value);
-        $caseHits = [];
-
-        foreach ($stored as $column => $values) {
-            foreach ($values as $candidate) {
-                if (mb_strtolower($candidate) === $lower) {
-                    $caseHits[$candidate . "\0" . $column] = ['to' => $candidate, 'column' => (string) $column];
-                }
-            }
-        }
+        $caseHits = array_values(array_unique(array_filter(
+            $stored,
+            fn (string $candidate) => mb_strtolower($candidate) === $lower
+        )));
 
         if (count($caseHits) === 1) {
-            return array_values($caseHits)[0];
+            return $caseHits[0];
         }
 
         if ($caseHits !== []) {
@@ -2823,30 +2943,26 @@ class QueryOrchestrator
 
         $allowed = min($maxDistance, $length >= 9 ? 2 : 1);
         $best = null;
+        $bestDistance = PHP_INT_MAX;
         $tied = false;
 
-        foreach ($stored as $column => $values) {
-            foreach ($values as $candidate) {
-                $distance = levenshtein($lower, mb_strtolower($candidate));
+        foreach ($stored as $candidate) {
+            $distance = levenshtein($lower, mb_strtolower($candidate));
 
-                if ($distance > $allowed) {
-                    continue;
-                }
+            if ($distance > $allowed) {
+                continue;
+            }
 
-                if ($best === null || $distance < $best['distance']) {
-                    $best = ['to' => $candidate, 'column' => (string) $column, 'distance' => $distance];
-                    $tied = false;
-                } elseif ($distance === $best['distance'] && $candidate !== $best['to']) {
-                    $tied = true;
-                }
+            if ($distance < $bestDistance) {
+                $best = $candidate;
+                $bestDistance = $distance;
+                $tied = false;
+            } elseif ($distance === $bestDistance && $candidate !== $best) {
+                $tied = true;
             }
         }
 
-        if ($best === null || $tied) {
-            return null;
-        }
-
-        return ['to' => $best['to'], 'column' => $best['column']];
+        return $tied ? null : $best;
     }
 
     protected function validateAndExecute(array $queryResult, ?string $dataset, array $metadata): array
@@ -2878,7 +2994,10 @@ class QueryOrchestrator
         //
         // Before validation, so the statement validated is the statement run,
         // and before lastSql, so the event describes the query that RAN.
-        [$queryResult, $aliased] = $this->applyValueAliases($queryResult);
+        // Pinned SQL runs exactly as it was reviewed: no value rewritten, no
+        // correction, no shape retry. It is still validated below.
+        $pinned = (bool) ($metadata['pinned_query'] ?? false);
+        [$queryResult, $aliased] = $pinned ? [$queryResult, []] : $this->applyValueAliases($queryResult);
         $sql = $queryResult['sql'];
 
         if ($aliased !== []) {
@@ -2979,15 +3098,21 @@ class QueryOrchestrator
             return $this->formatter->formatError('Database query failed: ' . $this->sanitizeDbError($e->getMessage()), $metadata, ErrorCode::DATABASE_ERROR);
         }
 
+        // A filter value that matched nothing because it was misspelled.
+        // Opt-in per column (`correct_typos`), bounded to one extra run, and
+        // entirely local - see correctMisspelledValue(). Tested before the
+        // empty-result branch, because matching nothing is not only zero
+        // rows: an ungrouped SUM over no rows is one row of NULL, and a COUNT
+        // is one row of 0. The first version waited for zero rows and missed
+        // the question the feature was written for.
+        if (!$pinned
+            && $this->answerCarriesNoData($rows)
+            && ($corrected = $this->correctMisspelledValue($queryResult, $dataset, $metadata, $connection))) {
+            return $corrected;
+        }
+
         // Empty results
         if (empty($rows)) {
-            // A filter value that matched nothing because it was misspelled.
-            // Opt-in per column (`correct_typos`), bounded to one extra run,
-            // and entirely local - see correctMisspelledValue().
-            if ($corrected = $this->correctMisspelledValue($queryResult, $dataset, $metadata, $connection)) {
-                return $corrected;
-            }
-
             $response = $this->formatter->formatNoData($queryResult);
             $response['metadata'] = $metadata;
 
@@ -3010,7 +3135,7 @@ class QueryOrchestrator
         // The regenerated prompt carries the question and the schema, exactly
         // as the first one did, plus one sentence saying the shape was wrong.
         // No value, no row, no count, and no driver message.
-        if ($retried = $this->retryForShape($queryResult, $rows, $dataset, $metadata)) {
+        if (!$pinned && ($retried = $this->retryForShape($queryResult, $rows, $dataset, $metadata))) {
             return $retried;
         }
 

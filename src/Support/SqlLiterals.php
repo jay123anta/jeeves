@@ -100,6 +100,177 @@ final class SqlLiterals
     }
 
     /**
+     * Rewrite literals, telling the callback which column each one is compared
+     * with - or null when the literal is not in a comparison this can read.
+     *
+     * A value belongs to the column it is compared with, not to every column
+     * the statement happens to name. Reading that relationship is what stops a
+     * rewrite meant for `district` from reaching a value compared to `note` in
+     * the same WHERE clause.
+     *
+     * Readable: `col = 'v'` and the other comparison operators, LIKE / ILIKE
+     * and their NOT forms, `col IN ('a', 'b')`, and any of those with LOWER,
+     * UPPER or TRIM around either side. Anything else - BETWEEN, COALESCE, a
+     * reversed `'v' = col`, a value in SELECT - yields null, and callers leave
+     * a null alone. Not reading a comparison is always safe; misreading one is
+     * not.
+     *
+     * @param  callable(string, ?string): ?string  $fn
+     */
+    public static function mapCompared(string $sql, callable $fn): string
+    {
+        $out = '';
+        $context = '';
+
+        foreach (self::segments($sql) as [$type, $text, $inner]) {
+            if ($type === 'literal') {
+                $replacement = $fn($inner, self::comparedColumn($context));
+
+                $out .= $replacement === null
+                    ? $text
+                    : "'" . str_replace("'", "''", $replacement) . "'";
+
+                // Seen from later literals, a value is just a value - which is
+                // what lets the IN pattern read the second item of a list.
+                $context .= "''";
+
+                continue;
+            }
+
+            $out .= $text;
+            $context .= $type === 'comment' ? ' ' : $text;
+        }
+
+        return $out;
+    }
+
+    /**
+     * The column each `?` placeholder is compared with, in order, with null
+     * wherever the comparison cannot be read. Bindings are positional, so this
+     * is what tells a caller which binding belongs to which column.
+     *
+     * @return array<int, ?string>
+     */
+    public static function placeholderColumns(string $sql): array
+    {
+        $columns = [];
+        $context = '';
+
+        foreach (self::segments($sql) as [$type, $text]) {
+            if ($type === 'literal') {
+                $context .= "''";
+
+                continue;
+            }
+
+            if ($type !== 'code') {
+                $context .= $type === 'comment' ? ' ' : $text;
+
+                continue;
+            }
+
+            $parts = explode('?', $text);
+            $last = count($parts) - 1;
+
+            foreach ($parts as $k => $part) {
+                $context .= $part;
+
+                if ($k < $last) {
+                    $columns[] = self::comparedColumn($context);
+                    $context .= "''";
+                }
+            }
+        }
+
+        return $columns;
+    }
+
+    /**
+     * Tables in FROM and JOIN, keyed by what a column reference may qualify
+     * them with: the lower-cased table name, its unqualified name, and its
+     * alias. `FROM va_units u` maps `u`, `va_units` to `va_units`.
+     *
+     * @return array<string, string>
+     */
+    public static function tableAliases(string $sql): array
+    {
+        $code = '';
+
+        foreach (self::segments($sql) as [$type, $text]) {
+            $code .= ($type === 'code' || $type === 'ident') ? $text : ' ';
+        }
+
+        $id = self::IDENTIFIER;
+        $reserved = [
+            'where', 'join', 'inner', 'left', 'right', 'full', 'cross', 'outer', 'natural',
+            'on', 'using', 'group', 'order', 'limit', 'having', 'union', 'lateral', 'window',
+        ];
+
+        preg_match_all(
+            '/\b(?:FROM|JOIN)\s+(?P<table>' . $id . '(?:\s*\.\s*' . $id . ')*)(?:\s+(?:AS\s+)?(?P<alias>' . $id . '))?/i',
+            $code,
+            $matches,
+            PREG_SET_ORDER
+        );
+
+        $map = [];
+
+        foreach ($matches as $hit) {
+            $table = self::unquote($hit['table']);
+            $short = strtolower(str_contains($table, '.') ? substr($table, strrpos($table, '.') + 1) : $table);
+
+            $map[strtolower($table)] = $table;
+            $map[$short] = $table;
+
+            $alias = isset($hit['alias']) ? strtolower(self::unquote($hit['alias'])) : '';
+
+            if ($alias !== '' && !in_array($alias, $reserved, true)) {
+                $map[$alias] = $table;
+            }
+        }
+
+        return $map;
+    }
+
+    /** A bare or quoted identifier: `name`, `"name"` or a backtick-quoted name. */
+    private const IDENTIFIER = '(?:"[^"]+"|`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)';
+
+    /**
+     * The column reference a value placed at the END of $before is compared
+     * with, or null. $before is the statement up to the value, with every
+     * earlier value shown as ''.
+     */
+    private static function comparedColumn(string $before): ?string
+    {
+        $id = self::IDENTIFIER;
+        $reference = $id . '(?:\s*\.\s*' . $id . ')*';
+        $wrappers = '(?:\s*\b(?:LOWER|UPPER|TRIM)\s*\()*';
+
+        $patterns = [
+            // col = v, LOWER(col) LIKE LOWER(v), t.col <> v ...
+            '/(?:\b(?:LOWER|UPPER|TRIM)\s*\(\s*)*(?P<col>' . $reference . ')\s*\)*\s*'
+                . '(?:=|<>|!=|<=|>=|<|>|\bNOT\s+I?LIKE\b|\bI?LIKE\b)' . $wrappers . '\s*$/i',
+            // col IN ('', '', v  - any item of the list
+            '/(?:\b(?:LOWER|UPPER|TRIM)\s*\(\s*)*(?P<col>' . $reference . ')\s*\)*\s*'
+                . '(?:\bNOT\s+)?\bIN\s*\(' . $wrappers . '\s*(?:\'\'\s*\)*\s*,' . $wrappers . '\s*)*$/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $before, $m)) {
+                return self::unquote($m['col']);
+            }
+        }
+
+        return null;
+    }
+
+    /** `"t" . "col"` and `t.col` alike become `t.col`. */
+    private static function unquote(string $identifier): string
+    {
+        return (string) preg_replace('/\s+/', '', str_replace(['"', '`'], '', $identifier));
+    }
+
+    /**
      * Split a statement into typed runs: code, literal, comment, ident.
      *
      * Byte-wise, which is safe for UTF-8 because every delimiter looked for is

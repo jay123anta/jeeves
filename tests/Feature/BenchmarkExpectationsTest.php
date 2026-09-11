@@ -189,4 +189,20 @@ class BenchmarkExpectationsTest extends TestCase
             $this->bench()
         );
     }
+
+    /**
+     * REVIEW FINDING. The entries of `contains` were never checked, so a
+     * nested array passed validation and then died at grading time with
+     * "Array to string conversion" - after the provider had been paid.
+     */
+    #[Test]
+    public function a_malformed_contains_is_refused_before_anything_runs(): void
+    {
+        $this->seedOrders();
+        $this->provider('SELECT SUM(revenue) AS r FROM nq_orders');
+        $this->writeQuestions("[['question' => 'total revenue', 'expect' => ['contains' => [['Acme']]]]]");
+
+        $this->assertStringContainsString("'expect.contains'", $this->bench());
+        $this->assertSame([], $this->provider->calls, 'the provider was called for a question set that should have been refused');
+    }
 }

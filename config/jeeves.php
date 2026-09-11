@@ -385,8 +385,9 @@ return [
     // data" - which is not true. The data is there; the spelling is not.
     //
     // Set 'correct_typos' => true on a column in its schema file. When a query
-    // comes back EMPTY, each value it filtered on is compared with the values
-    // that column actually holds, and one clearly closest value - a different
+    // comes back EMPTY - no rows, or a single total of NULL or 0 - each value
+    // compared with that column is checked against the values it actually
+    // holds, and one clearly closest value - a different
     // case, or an edit or two away - is swapped in and the query runs once
     // more. The answer reports the swap in metadata.value_corrections.
     //

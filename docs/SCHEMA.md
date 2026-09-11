@@ -85,7 +85,11 @@ column actually holds:
 ],
 ```
 
-- **Only when the answer is empty.** A query that found rows is never touched.
+- **Only when the answer is empty** - no rows, or a single total of `NULL` or
+  `0`, which is what an ungrouped `SUM` or `COUNT` returns when its filter
+  matched nothing. An answer with data in it is never touched.
+- **Only toward the column it is compared with.** A value filtered on
+  `category` is checked against the categories, never against product names.
 - **A stored value is never "corrected".** The empty answer is then true about
   the other conditions.
 - **One clearly closest value, or nothing.** A different case is corrected at

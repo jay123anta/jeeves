@@ -28,7 +28,8 @@ for order statuses, country names or a renamed region.
 
 ### A misspelled value is corrected instead of answered "no data"
 
-`correct_typos` on a column: when a query filtering on it finds nothing, the
+`correct_typos` on a column: when a query filtering on it finds nothing - no
+rows, or a total of NULL or 0 - the
 value typed is compared with the values the column holds, and one clearly
 closest - a different case, or an edit or two away - is swapped in for one more
 run. Each correction is reported in `metadata.value_corrections`. The stored
@@ -50,8 +51,9 @@ runs, so a typo in a check cannot read as the package being wrong.
 `pinned_queries` ties an exact question - case, punctuation and spacing
 ignored, nothing fuzzier - to reviewed SQL that runs with no model call and the
 same answer every time. It is still validated like any other statement: SELECT
-only, tables from your schema files, the LIMIT rule and `required_filter`. A
-pinned answer is timed, audited and announced like every other.
+only, tables from your schema files, the LIMIT rule and `required_filter`. It
+runs exactly as written: no value alias, typo correction or shape retry touches
+reviewed SQL. A pinned answer is timed, audited and announced like every other.
 
 It buys stability for the questions that must never vary. It says nothing about
 accuracy on the questions nobody pinned, and a test suite made of pinned

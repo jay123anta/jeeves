@@ -104,4 +104,86 @@ class SqlLiteralsTest extends TestCase
         $this->assertFalse(SqlLiterals::mentions("SELECT * FROM t WHERE subdistrict = 'x'", 'district'));
         $this->assertFalse(SqlLiterals::mentions("SELECT * FROM t WHERE district_code = 'x'", 'district'));
     }
+
+    /**
+     * Each literal reaches the callback with the column it is COMPARED with -
+     * the relationship the first version of value aliases never read, which
+     * let a rewrite meant for one column reach a value compared to another.
+     */
+    #[Test]
+    public function each_literal_is_bound_to_the_column_it_is_compared_with(): void
+    {
+        $seen = [];
+
+        SqlLiterals::mapCompared(
+            "SELECT * FROM t WHERE a = 'x' AND LOWER(b) = LOWER('y') AND c IN ('p', 'q') "
+            . "AND d LIKE '%z%' AND u.e <> 'w' AND \"f\" NOT ILIKE 'v'",
+            function (string $value, ?string $column) use (&$seen) {
+                $seen[] = [$value, $column];
+
+                return null;
+            }
+        );
+
+        $this->assertSame(
+            [['x', 'a'], ['y', 'b'], ['p', 'c'], ['q', 'c'], ['%z%', 'd'], ['w', 'u.e'], ['v', 'f']],
+            $seen
+        );
+    }
+
+    /**
+     * A value outside a comparison this can read has no column, and every
+     * caller leaves a null alone. Not reading is safe; misreading is not.
+     */
+    #[Test]
+    public function a_literal_outside_a_readable_comparison_has_no_column(): void
+    {
+        $seen = [];
+
+        SqlLiterals::mapCompared(
+            "SELECT 'label' AS x, COALESCE(a, 'n') FROM t WHERE b BETWEEN 'c' AND 'd' AND e LIKE ? ESCAPE '!'",
+            function (string $value, ?string $column) use (&$seen) {
+                $seen[] = $column;
+
+                return null;
+            }
+        );
+
+        $this->assertSame([null, null, null, null, null], $seen);
+    }
+
+    /** Intent mode's positional bindings, in the exact shape SqlBuilder writes them. */
+    #[Test]
+    public function each_placeholder_is_bound_to_the_column_it_is_compared_with(): void
+    {
+        $this->assertSame(
+            ['district', 'district', 'created_at', 'district'],
+            SqlLiterals::placeholderColumns(
+                "SELECT * FROM t WHERE (LOWER(district) = LOWER(?) OR LOWER(district) LIKE LOWER(?) ESCAPE '!') "
+                . 'AND created_at >= ? ORDER BY CASE WHEN LOWER(district) = LOWER(?) THEN 0 ELSE 1 END LIMIT 1'
+            )
+        );
+
+        $this->assertSame(['s', 's'], SqlLiterals::placeholderColumns('SELECT * FROM t WHERE s IN (?, ?)'));
+    }
+
+    #[Test]
+    public function table_aliases_come_from_from_and_join(): void
+    {
+        $map = SqlLiterals::tableAliases('SELECT * FROM public.va_units u JOIN va_staff AS s ON s.id = u.id WHERE u.x = 1');
+
+        $this->assertSame('public.va_units', $map['u'] ?? null);
+        $this->assertSame('public.va_units', $map['va_units'] ?? null);
+        $this->assertSame('va_staff', $map['s'] ?? null);
+    }
+
+    /** `FROM t WHERE` must not make WHERE an alias of t. */
+    #[Test]
+    public function a_keyword_after_a_table_is_not_taken_for_an_alias(): void
+    {
+        $this->assertSame(
+            ['va_units' => 'va_units'],
+            SqlLiterals::tableAliases('SELECT * FROM va_units WHERE x = 1 GROUP BY y')
+        );
+    }
 }

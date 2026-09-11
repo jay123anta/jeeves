@@ -211,4 +211,41 @@ class ValueAliasesTest extends TestCase
         $this->assertSame('Sribhumi', $this->districts($result)[0]['district'] ?? null);
         $this->assertNotEmpty($result['metadata']['value_aliases_applied'] ?? []);
     }
+
+    /**
+     * REVIEW FINDING. The aliased column appearing ANYWHERE in the statement
+     * used to license rewriting every matching literal in it - including one
+     * compared to a free-text column. The earlier test in this file passed
+     * only because its SQL never mentioned `district` at all.
+     */
+    #[Test]
+    public function a_word_compared_to_another_column_is_left_alone_even_when_the_aliased_column_is_selected(): void
+    {
+        $this->seedTables();
+        DB::table('va_units')->where('district', 'Kamrup')->update(['note' => 'Karimganj']);
+
+        $result = $this->answer(
+            "SELECT district, COUNT(*) AS n FROM va_units WHERE note = 'Karimganj' GROUP BY district LIMIT 10"
+        );
+
+        $this->assertSame(
+            'Kamrup',
+            $this->districts($result)[0]['district'] ?? null,
+            'a literal compared to `note` was rewritten because `district` was selected: ' . json_encode($result)
+        );
+        $this->assertArrayNotHasKey('value_aliases_applied', $result['metadata'] ?? []);
+    }
+
+    /** The fix binds a value to the column it is compared with; a qualified reference still counts. */
+    #[Test]
+    public function a_qualified_column_reference_is_still_aliased(): void
+    {
+        $this->seedTables();
+
+        $result = $this->answer(
+            "SELECT u.district, SUM(u.units) AS units FROM va_units u WHERE u.district = 'Karimganj' GROUP BY u.district LIMIT 10"
+        );
+
+        $this->assertSame('Sribhumi', $this->districts($result)[0]['district'] ?? null, json_encode($result));
+    }
 }

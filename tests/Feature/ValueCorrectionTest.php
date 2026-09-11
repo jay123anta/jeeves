@@ -298,4 +298,60 @@ class ValueCorrectionTest extends TestCase
         $this->assertSame('Keyboard', $this->first($result)['name'] ?? null);
         $this->assertNotEmpty($result['metadata']['value_corrections'] ?? []);
     }
+
+    /**
+     * REVIEW FINDING. Every filtered value used to be compared with the stored
+     * values of EVERY opted-in column, so a value filtered on `category` could
+     * be "corrected" toward a product name. A value is only corrected toward
+     * the values of the column it is actually compared with.
+     */
+    #[Test]
+    public function a_value_is_only_corrected_toward_the_column_it_is_compared_with(): void
+    {
+        $this->seedTables();
+
+        $this->assertNotCorrected(
+            $this->answer("SELECT name, SUM(stock) AS stock FROM vc_products WHERE category = 'Keybord' GROUP BY name LIMIT 10"),
+            'a value filtered on `category` was corrected toward a value of `name`'
+        );
+    }
+
+    /**
+     * REVIEW FINDING. The headline question. An ungrouped SUM over no rows is
+     * ONE row holding NULL, not zero rows, so the empty-result trigger never
+     * fired and "stock of Keybord" still answered "nothing matched".
+     */
+    #[Test]
+    public function an_ungrouped_total_over_a_misspelled_value_is_corrected(): void
+    {
+        $this->seedTables();
+
+        $result = $this->answer("SELECT SUM(stock) AS stock FROM vc_products WHERE name = 'Keybord'");
+
+        $this->assertEquals(12, $this->first($result)['stock'] ?? null, json_encode($result));
+        $this->assertSame('Keyboard', $result['metadata']['value_corrections'][0]['to'] ?? null);
+    }
+
+    /** The same gap for COUNT, which answers 0 rather than NULL. */
+    #[Test]
+    public function an_ungrouped_count_over_a_misspelled_value_is_corrected(): void
+    {
+        $this->seedTables();
+
+        $result = $this->answer("SELECT COUNT(*) AS n FROM vc_products WHERE name = 'Keybord'");
+
+        $this->assertEquals(1, $this->first($result)['n'] ?? null, json_encode($result));
+    }
+
+    /** COUNTERWEIGHT. A zero that is true - the value is stored - is left exactly as it is. */
+    #[Test]
+    public function a_genuine_zero_is_not_touched(): void
+    {
+        $this->seedTables();
+
+        $result = $this->answer("SELECT COUNT(*) AS n FROM vc_products WHERE name = 'Keyboard' AND stock > 1000");
+
+        $this->assertEquals(0, $this->first($result)['n'] ?? null, json_encode($result));
+        $this->assertArrayNotHasKey('value_corrections', $result['metadata'] ?? []);
+    }
 }

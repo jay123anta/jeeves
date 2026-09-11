@@ -285,6 +285,14 @@ class BenchmarkCommand extends Command
             }
         }
 
+        // A nested list passed here once, and died at grading time with "Array
+        // to string conversion" - after every question had been paid for.
+        foreach ((array) ($expect['contains'] ?? []) as $wanted) {
+            if (!is_scalar($wanted)) {
+                return "'expect.contains' must be a name or a list of names, not a nested list.";
+            }
+        }
+
         if (isset($expect['column']) && !isset($expect['min']) && !isset($expect['max'])) {
             return "'expect.column' names the value 'min' and 'max' check, and neither is set.";
         }
